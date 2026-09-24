@@ -31,10 +31,13 @@ final class IslandPanel: NSPanel {
         case "x":
             return NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil) || true
         case "v":
-            if NSApp.sendAction(#selector(NSTextView.pasteAsPlainText(_:)), to: nil, from: nil) {
-                return true
-            }
             return NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil) || true
+        case "b":
+            NotificationCenter.default.post(name: .islandNoteBold, object: nil)
+            return true
+        case "i":
+            NotificationCenter.default.post(name: .islandNoteItalic, object: nil)
+            return true
         case "a":
             return NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil) || true
         case "z":
@@ -89,6 +92,7 @@ final class IslandNoteController: NSObject {
     private(set) var mode: Mode = .rest
 
     private var pendingCollapse: DispatchWorkItem?
+    private var finishingCollapse = false
     private var monitors: [Any] = []
 
     init(store: NoteStore) {
@@ -258,9 +262,18 @@ final class IslandNoteController: NSObject {
     }
 
     private func bindStore() {
-        editor.string = store.load()
         store.onSaved = { [weak self] in
             self?.editor.flashSavedIndicator()
+        }
+        store.onSaveError = { [weak self] message in
+            self?.editor.showSaveError(message)
+        }
+        do {
+            editor.string = try store.load()
+            editor.setEditingEnabled(true)
+        } catch {
+            editor.setEditingEnabled(false)
+            editor.showSaveError("Could not open \(store.path): \(error.localizedDescription)")
         }
     }
 
@@ -364,7 +377,6 @@ final class IslandNoteController: NSObject {
 
     @objc private func collapseAction() { collapse() }
     @objc private func quitAction() {
-        store.flushSync()
         NSApp.terminate(nil)
     }
 
@@ -372,6 +384,14 @@ final class IslandNoteController: NSObject {
 
     func expand() {
         guard mode != .expanded else { return }
+        do {
+            if let updatedText = try store.refreshIfClean() {
+                editor.string = updatedText
+                editor.setEditingEnabled(true)
+            }
+        } catch {
+            editor.showSaveError("Could not read \(store.path): \(error.localizedDescription)")
+        }
         goTo(.expanded)
         Haptics.expand()
         NSApp.activate(ignoringOtherApps: true)
@@ -386,12 +406,24 @@ final class IslandNoteController: NSObject {
             if mode == .hover { goTo(.rest) }
             return
         }
+        guard !finishingCollapse else { return }
+        finishingCollapse = true
+        // The Markdown editor delivers the new source text asynchronously.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.finishingCollapse = false
+            guard self.mode == .expanded else { return }
+            self.editor.flushPending()
+            guard self.store.flushSync() else { return }
+            self.goTo(.rest)
+            Haptics.collapse()
+            self.pendingCollapse?.cancel()
+            self.pendingCollapse = nil
+        }
+    }
+
+    func flushEditor() {
         editor.flushPending()
-        store.flushSync()
-        goTo(.rest)
-        Haptics.collapse()
-        pendingCollapse?.cancel()
-        pendingCollapse = nil
     }
 
     /// 只动画遮罩形状（顶边恒定）。expanded 用弹簧回弹。
@@ -447,7 +479,7 @@ final class IslandNoteController: NSObject {
     }
 }
 
-// MARK: - 编辑器（纯文本，黑底）
+// MARK: - Editor edge fade
 
 /// 文字区四边羽化：上下渐隐 + 左右软边。
 final class EdgeFeatherView: NSView {
@@ -480,248 +512,5 @@ final class EdgeFeatherView: NSView {
 
         let rightRect = NSRect(x: b.maxX - sideW, y: 0, width: sideW, height: b.height)
         NSGradient(colors: [NSColor.black, clear])!.draw(in: rightRect, angle: 180)
-    }
-}
-
-final class NoteEditorView: NSView, NSTextViewDelegate {
-    private let scrollView = NSScrollView()
-    private let textView = NSTextView()
-    private let placeholder = NSTextField(labelWithString: "写点什么…")
-    private let savedDot = NSView()
-    private var savedPulse: DispatchWorkItem?
-
-    var onTextChanged: ((String) -> Void)?
-    var onRequestCollapse: (() -> Void)?
-    var onRequestQuit: (() -> Void)?
-    var onSavedPulse: (() -> Void)?
-
-    var string: String {
-        get { textView.string }
-        set {
-            textView.string = newValue
-            applyTypingStyle(to: textView.textStorage)
-            updatePlaceholder()
-        }
-    }
-
-    private func applyTypingStyle(to storage: NSTextStorage?) {
-        guard let storage, storage.length > 0 else {
-            if let font = textView.font {
-                let para = textView.defaultParagraphStyle ?? NSParagraphStyle()
-                textView.typingAttributes = [
-                    .font: font,
-                    .foregroundColor: NSColor(white: 0.92, alpha: 1),
-                    .paragraphStyle: para,
-                ]
-            }
-            return
-        }
-        let range = NSRange(location: 0, length: storage.length)
-        let para = textView.defaultParagraphStyle ?? NSParagraphStyle()
-        storage.addAttributes([
-            .font: NSFont.systemFont(ofSize: 15, weight: .regular),
-            .foregroundColor: NSColor(white: 0.92, alpha: 1),
-            .paragraphStyle: para,
-        ], range: range)
-    }
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        setup()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    private func setup() {
-        wantsLayer = true
-
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.drawsBackground = false
-        scrollView.borderType = .noBorder
-        scrollView.hasVerticalScroller = true
-        scrollView.scrollerStyle = .overlay
-        scrollView.autohidesScrollers = true
-        scrollView.automaticallyAdjustsContentInsets = false
-        // 末行必须能整体滚出底部 64px 渐隐带：滚到底时文本末端停在底边之上
-        // 64(inset) + 10(textContainerInset)px，正好整行落在全清区。
-        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 64, right: 0)
-
-        // 编辑器内容避开顶部岛缘
-        textView.frame = NSRect(x: 0, y: 0, width: 480, height: 280)
-        textView.isRichText = false
-        textView.allowsUndo = true
-        textView.isAutomaticQuoteSubstitutionEnabled = false
-        textView.isAutomaticDashSubstitutionEnabled = false
-        textView.isAutomaticTextReplacementEnabled = false
-        textView.isAutomaticSpellingCorrectionEnabled = false
-        textView.isContinuousSpellCheckingEnabled = false
-        textView.usesFindBar = true
-        textView.isIncrementalSearchingEnabled = true
-        textView.delegate = self
-        textView.drawsBackground = false
-        // 与占位符同一套 padding：lineFragmentPadding=0，光标与「写点什么…」左对齐
-        textView.textContainer?.lineFragmentPadding = 0
-        textView.textContainerInset = NSSize(width: 36, height: 10)
-        let font = NSFont.systemFont(ofSize: 15, weight: .regular)
-        textView.font = font
-        let para = NSMutableParagraphStyle()
-        para.lineHeightMultiple = 1.5
-        para.minimumLineHeight = 22.5
-        para.maximumLineHeight = 22.5
-        textView.defaultParagraphStyle = para
-        textView.typingAttributes = [
-            .font: font,
-            .foregroundColor: NSColor(white: 0.92, alpha: 1),
-            .paragraphStyle: para,
-        ]
-        textView.textColor = NSColor(white: 0.92, alpha: 1)
-        textView.insertionPointColor = NSColor(white: 0.75, alpha: 1)
-        textView.isVerticallyResizable = true
-        textView.isHorizontallyResizable = false
-        textView.autoresizingMask = [.width]
-        textView.textContainer?.widthTracksTextView = true
-        textView.minSize = .zero
-        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        textView.selectedTextAttributes = [
-            .backgroundColor: NSColor(white: 1, alpha: 0.18),
-            .foregroundColor: NSColor(white: 0.95, alpha: 1),
-        ]
-
-        scrollView.documentView = textView
-
-        placeholder.translatesAutoresizingMaskIntoConstraints = false
-        placeholder.textColor = NSColor(white: 1, alpha: 0.28)
-        placeholder.font = NSFont.systemFont(ofSize: 15, weight: .regular)
-        placeholder.isEditable = false
-        placeholder.isBordered = false
-        placeholder.backgroundColor = .clear
-
-        savedDot.translatesAutoresizingMaskIntoConstraints = false
-        savedDot.wantsLayer = true
-        savedDot.layer?.backgroundColor = NSColor.systemGreen.withAlphaComponent(0).cgColor
-        savedDot.layer?.cornerRadius = 3
-
-        addSubview(scrollView)
-        addSubview(placeholder)
-        addSubview(savedDot)
-
-        // 四边羽化盖住整个文字视口（含裁切线）
-        let featherView = EdgeFeatherView(frame: .zero)
-        featherView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(featherView)
-
-        NSLayoutConstraint.activate([
-            // 顶部 40px 是纯空白区，文字/滚动都进不来
-            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            scrollView.topAnchor.constraint(equalTo: topAnchor, constant: 40),
-            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
-
-            // 羽化层与 scrollView 同框，上下左右一起软边
-            featherView.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
-            featherView.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor),
-            featherView.topAnchor.constraint(equalTo: scrollView.topAnchor),
-            featherView.bottomAnchor.constraint(equalTo: scrollView.bottomAnchor),
-
-            placeholder.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 36),
-            placeholder.trailingAnchor.constraint(lessThanOrEqualTo: savedDot.leadingAnchor, constant: -8),
-            placeholder.topAnchor.constraint(equalTo: scrollView.topAnchor, constant: 12),
-
-            savedDot.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            savedDot.topAnchor.constraint(equalTo: topAnchor, constant: 16),
-            savedDot.widthAnchor.constraint(equalToConstant: 6),
-            savedDot.heightAnchor.constraint(equalToConstant: 6),
-        ])
-
-        updatePlaceholder()
-        textView.menu = buildContextMenu()
-    }
-
-    func focus() {
-        window?.makeFirstResponder(textView)
-        updatePlaceholder()
-    }
-
-    func blur() {
-        if window?.firstResponder === textView {
-            window?.makeFirstResponder(nil)
-        }
-    }
-
-    func flushPending() {
-        onTextChanged?(textView.string)
-    }
-
-    func flashSavedIndicator() {
-        savedPulse?.cancel()
-        savedDot.layer?.backgroundColor = NSColor.systemGreen.withAlphaComponent(0.9).cgColor
-        let work = DispatchWorkItem { [weak self] in
-            self?.savedDot.layer?.backgroundColor = NSColor.systemGreen.withAlphaComponent(0).cgColor
-        }
-        savedPulse = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
-    }
-
-    private func updatePlaceholder() {
-        placeholder.isHidden = !textView.string.isEmpty
-    }
-
-    /// Esc 收起；其余编辑键交给主菜单 / 文本视图，不在此拦截（避免误吞与系统提示音）。
-    func handleKey(_ event: NSEvent) -> NSEvent? {
-        if event.keyCode == 53 { // Esc
-            onRequestCollapse?()
-            return nil
-        }
-        // 空栈撤销/重做不调用，避免系统「滴」
-        if event.modifierFlags.contains(.command),
-           event.charactersIgnoringModifiers?.lowercased() == "z" {
-            let um = textView.undoManager
-            if event.modifierFlags.contains(.shift) {
-                if um?.canRedo == true { um?.redo() }
-            } else {
-                if um?.canUndo == true { um?.undo() }
-            }
-            return nil
-        }
-        return event
-    }
-
-    func buildContextMenu() -> NSMenu {
-        let menu = NSMenu()
-        let copy = NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        copy.target = textView
-        menu.addItem(copy)
-        let paste = NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        paste.target = textView
-        menu.addItem(paste)
-        let cut = NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        cut.target = textView
-        menu.addItem(cut)
-        let all = NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
-        all.target = textView
-        menu.addItem(all)
-        menu.addItem(.separator())
-        let collapse = NSMenuItem(title: "Collapse", action: #selector(collapseFromMenu), keyEquivalent: "")
-        collapse.target = self
-        menu.addItem(collapse)
-        let quit = NSMenuItem(title: "Quit Island Note", action: #selector(quitFromMenu), keyEquivalent: "q")
-        quit.keyEquivalentModifierMask = [.command]
-        quit.target = self
-        menu.addItem(quit)
-        return menu
-    }
-
-    @objc private func collapseFromMenu() {
-        onRequestCollapse?()
-    }
-
-    @objc private func quitFromMenu() {
-        onRequestQuit?()
-    }
-
-    func textDidChange(_ notification: Notification) {
-        updatePlaceholder()
-        onTextChanged?(textView.string)
     }
 }

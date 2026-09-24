@@ -1,19 +1,23 @@
 # Island Note
 
-A small macOS scratchpad that lives in a black capsule at the top of the screen. Hover to open the editor; move away or press `Esc` to collapse it. Notes save automatically as plain text.
+A small macOS scratchpad in a black capsule at the top of the screen. Hover to open it, write with live-rendered Markdown, and move away or press `Esc` to collapse it.
 
 ## Run
 
-Requires macOS 13 or later and Swift 5.9 or later.
+Requires macOS 14 or later and Swift 5.9 or later.
 
 ```bash
 make run
 ```
 
-This builds and opens `IslandNote.app`. Use `make package` to build the app without opening it.
+`make package` builds `IslandNote.app` without opening it.
 
-## Notes
+## Storage
 
-The app saves text to `notes/scratch.txt` when run from this project. That file is ignored by Git so your notes stay local. If the project directory is unavailable, the app uses `~/Projects/island-note/notes/scratch.txt` or `~/Library/Application Support/IslandNote/scratch.txt`.
+Island Note edits one document directly in the local Obsidian vault:
 
-Built with Swift and AppKit.
+`~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Miles-Vault/Dairy notes/Island Note.md`
+
+Changes save automatically while typing and when the panel closes. The Vault folder must already exist. The original `notes/scratch.txt` is kept locally as a backup and remains ignored by Git.
+
+Built with Swift, AppKit, and [SwiftMarkdownEngine](https://github.com/nodes-app/swift-markdown-engine).
