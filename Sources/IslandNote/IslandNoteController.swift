@@ -507,7 +507,7 @@ final class EdgeFeatherView: NSView {
         // 上下效果对调并反转
         if topFadeProgress > 0 {
             let topRect = NSRect(x: 0, y: b.maxY - verticalFadeH, width: b.width, height: verticalFadeH)
-            NSGradient(colors: [clear, NSColor.black.withAlphaComponent(topFadeProgress)])!
+            NSGradient(colors: [clear, NSColor.black.withAlphaComponent(topFadeProgress * 0.55)])!
                 .draw(in: topRect, angle: 90)
         }
 

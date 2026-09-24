@@ -54,14 +54,14 @@ private struct MarkdownEditorHost: View {
                 }
             ),
             configuration: Self.configuration,
-            fontSize: 15,
+            fontSize: 14,
             documentId: "island-note",
             isEditable: model.isEditable,
             onBuildContextMenu: onBuildContextMenu,
             placeholder: NSAttributedString(
                 string: "写点什么…",
                 attributes: [
-                    .font: NSFont.systemFont(ofSize: 15),
+                    .font: NSFont.systemFont(ofSize: 14),
                     .foregroundColor: NSColor(white: 1, alpha: 0.28),
                 ]
             )
