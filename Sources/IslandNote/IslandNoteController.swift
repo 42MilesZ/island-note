@@ -1,0 +1,727 @@
+import AppKit
+
+/// 命中放行：只在当前可见形状内接管点击，其余穿透到下方（菜单栏照常可点）。
+final class IslandView: NSView {
+    override var isFlipped: Bool { false } // 原点左下，顶 = maxY
+    var hitRect = NSRect.zero
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if !hitRect.isEmpty && !hitRect.contains(point) { return nil }
+        return super.hitTest(point)
+    }
+}
+
+/// 无边框、可成为 key 的岛体面板（同 Spirit / DynamicNotchKit 窗口配方）。
+final class IslandPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+
+    /// nonactivatingPanel 下菜单 keyEquivalent 不稳，这里显式把编辑命令派给 firstResponder；
+    /// 其余 ⌘ 组合吞掉，避免系统「滴」声。
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let flags = event.modifierFlags
+        guard flags.contains(.command), !flags.contains(.control), !flags.contains(.option) else {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        let key = event.charactersIgnoringModifiers?.lowercased() ?? ""
+        switch key {
+        case "c":
+            return NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil) || true
+        case "x":
+            return NSApp.sendAction(#selector(NSText.cut(_:)), to: nil, from: nil) || true
+        case "v":
+            if NSApp.sendAction(#selector(NSTextView.pasteAsPlainText(_:)), to: nil, from: nil) {
+                return true
+            }
+            return NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil) || true
+        case "a":
+            return NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil) || true
+        case "z":
+            let um = (firstResponder as? NSText)?.undoManager
+                ?? (firstResponder as? NSView)?.window?.firstResponder?.undoManager
+            if flags.contains(.shift) {
+                if um?.canRedo == true { um?.redo() }
+            } else {
+                if um?.canUndo == true { um?.undo() }
+            }
+            return true
+        case "q":
+            NSApp.terminate(nil)
+            return true
+        default:
+            return true
+        }
+    }
+}
+
+/// 固定岛体 + 只动画遮罩形状（借鉴 Spirit NotchApp）。
+/// 所有形态顶边钉在屏幕最顶 → 展开/收回不裂缝。
+final class IslandNoteController: NSObject {
+    private let store: NoteStore
+
+    // 窗口与岛体
+    private var panel: IslandPanel!
+    private var island: IslandView!
+    private var maskLayer: CAShapeLayer!
+    private var editor: NoteEditorView!
+    private var hitGate: IslandView!
+
+    // 几何
+    private var screenFrame = NSRect.zero
+    private var notchW: CGFloat = 200
+    private var notchH: CGFloat = 32
+    private var eW: CGFloat = 460
+    private var panelH: CGFloat = 240
+    private var gutter: CGFloat = 16
+    private var eH: CGFloat = 256
+
+    private var restRect = NSRect.zero
+    private var hoverRect = NSRect.zero
+    private var expandedRect = NSRect.zero
+
+    private let compactTopR: CGFloat = 10
+    private let compactBotR: CGFloat = 20
+    private let expandedTopR: CGFloat = 10
+    private let expandedBotR: CGFloat = 32
+
+    enum Mode { case rest, hover, expanded }
+    private(set) var mode: Mode = .rest
+
+    private var pendingCollapse: DispatchWorkItem?
+    private var monitors: [Any] = []
+
+    init(store: NoteStore) {
+        self.store = store
+        super.init()
+        installMainMenu()
+        setup()
+        bindStore()
+    }
+
+    /// 主菜单 Edit：让 ⌘C/V/X/A/Z 走标准 responder，少一层拦截。
+    private func installMainMenu() {
+        let main = NSMenu()
+        let editItem = NSMenuItem()
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(redo)
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = edit
+        main.addItem(editItem)
+
+        let appItem = NSMenuItem()
+        let appMenu = NSMenu(title: "Island Note")
+        let quit = NSMenuItem(title: "Quit Island Note", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        appMenu.addItem(quit)
+        appItem.submenu = appMenu
+        main.addItem(appItem)
+
+        NSApp.mainMenu = main
+    }
+
+    // MARK: - 几何辅助
+
+    private func notchScreen() -> NSScreen {
+        NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 })
+            ?? NSScreen.main
+            ?? NSScreen.screens[0]
+    }
+
+    private func screenRect(_ r: NSRect) -> NSRect {
+        let o = panel.frame.origin
+        return NSRect(x: o.x + r.minX, y: o.y + r.minY, width: r.width, height: r.height)
+    }
+
+    private func radii(for m: Mode) -> (CGFloat, CGFloat) {
+        switch m {
+        case .expanded: return (expandedTopR, expandedBotR)
+        default: return (compactTopR, compactBotR)
+        }
+    }
+
+    private func rect(for m: Mode) -> NSRect {
+        switch m {
+        case .rest: return restRect
+        case .hover: return hoverRect
+        case .expanded: return expandedRect
+        }
+    }
+
+    /// 灵动岛轮廓：顶边全宽 + 顶部微内凹、底部大圆角。顶 = rect.maxY（所有形态共用）。
+    private func notchPath(_ r: CGRect, topR: CGFloat, botR: CGFloat) -> CGPath {
+        let L = r.minX, R = r.maxX, T = r.maxY, B = r.minY
+        let p = CGMutablePath()
+        p.move(to: CGPoint(x: L, y: T))
+        p.addQuadCurve(to: CGPoint(x: L + topR, y: T - topR), control: CGPoint(x: L + topR, y: T))
+        p.addLine(to: CGPoint(x: L + topR, y: B + botR))
+        p.addQuadCurve(to: CGPoint(x: L + topR + botR, y: B), control: CGPoint(x: L + topR, y: B))
+        p.addLine(to: CGPoint(x: R - topR - botR, y: B))
+        p.addQuadCurve(to: CGPoint(x: R - topR, y: B + botR), control: CGPoint(x: R - topR, y: B))
+        p.addLine(to: CGPoint(x: R - topR, y: T - topR))
+        p.addQuadCurve(to: CGPoint(x: R, y: T), control: CGPoint(x: R - topR, y: T))
+        p.closeSubpath()
+        return p
+    }
+
+    // MARK: - Setup
+
+    private func setup() {
+        let screen = notchScreen()
+        let sf = screen.frame
+        screenFrame = sf
+        notchH = max(screen.safeAreaInsets.top, 32)
+        if let l = screen.auxiliaryTopLeftArea, let r = screen.auxiliaryTopRightArea {
+            let w = sf.width - l.width - r.width
+            if w > 40 { notchW = w }
+        }
+
+        // 灵动岛比例取中：略扁略宽，不过分
+        let barH: CGFloat = 33
+        panelH = 275
+        gutter = 16
+        eW = 460
+        eH = panelH + gutter
+
+        let winFrame = NSRect(x: sf.midX - eW / 2, y: sf.maxY - eH, width: eW, height: eH)
+
+        // 可见形状——顶边都 = eH（屏幕最顶），只向下生长
+        expandedRect = NSRect(x: 0, y: eH - panelH, width: eW, height: panelH)
+        let restW = max(notchW * 1.06, 210) - 11
+        restRect = NSRect(x: (eW - restW) / 2, y: eH - barH, width: restW, height: barH)
+        hoverRect = NSRect(
+            x: (eW - restW - 14) / 2,
+            y: eH - barH - 4,
+            width: restW + 14,
+            height: barH + 4
+        )
+
+        panel = IslandPanel(
+            contentRect: winFrame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.level = .screenSaver
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.isMovableByWindowBackground = false
+        panel.hidesOnDeactivate = false
+        panel.isReleasedWhenClosed = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        panel.becomesKeyOnlyIfNeeded = false
+
+        let content = IslandView(frame: NSRect(origin: .zero, size: winFrame.size))
+        content.wantsLayer = true
+        content.hitRect = restRect
+        hitGate = content
+
+        island = IslandView(frame: NSRect(origin: .zero, size: winFrame.size))
+        island.wantsLayer = true
+        island.autoresizesSubviews = true
+        island.layer?.backgroundColor = NSColor.black.cgColor
+        maskLayer = CAShapeLayer()
+        maskLayer.frame = island.bounds
+        maskLayer.path = notchPath(restRect, topR: compactTopR, botR: compactBotR)
+        island.layer?.mask = maskLayer
+
+        editor = NoteEditorView(frame: expandedRect)
+        editor.autoresizingMask = [.width, .height]
+        editor.onTextChanged = { [weak self] text in
+            self?.store.save(text)
+        }
+        editor.onRequestCollapse = { [weak self] in
+            self?.collapse()
+        }
+        editor.onRequestQuit = {
+            NSApp.terminate(nil)
+        }
+        // 编辑器只覆盖可见形状（expandedRect）：底边 = 遮罩底边，
+        // 原先铺满全窗口时底部 16px gutter 成了「滚得到但永远看不见」的死区。
+        editor.frame = expandedRect
+        editor.isHidden = true
+        editor.alphaValue = 0
+        island.addSubview(editor)
+
+        content.addSubview(island)
+        panel.contentView = content
+        panel.orderFrontRegardless()
+
+        installMonitors()
+    }
+
+    private func bindStore() {
+        editor.string = store.load()
+        store.onSaved = { [weak self] in
+            self?.editor.flashSavedIndicator()
+        }
+    }
+
+    private func installMonitors() {
+        let g = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] _ in
+            self?.handleHover()
+        }
+        let l = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .scrollWheel]) { [weak self] e in
+            self?.handleHover()
+            return e
+        }
+        let gc = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] e in
+            self?.handleClick(e)
+        }
+        let lc = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] e in
+            self?.handleClick(e)
+            return e
+        }
+        let gr = NSEvent.addGlobalMonitorForEvents(matching: [.rightMouseDown]) { [weak self] e in
+            self?.handleRightClick(e)
+        }
+        let lr = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown]) { [weak self] e in
+            self?.handleRightClick(e)
+            return e
+        }
+        let lk = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            guard let self else { return e }
+            return self.editor.handleKey(e) ?? e
+        }
+        monitors = [g, l, gc, lc, gr, lr, lk].compactMap { $0 }
+    }
+
+    // MARK: - 悬停 / 点击
+
+    private func handleHover() {
+        let loc = NSEvent.mouseLocation
+        switch mode {
+        case .expanded:
+            let inExpanded = screenRect(rect(for: .expanded)).insetBy(dx: -10, dy: -8).contains(loc)
+            if inExpanded {
+                pendingCollapse?.cancel()
+                pendingCollapse = nil
+            } else if pendingCollapse == nil {
+                let work = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    self.pendingCollapse = nil
+                    if self.mode == .expanded,
+                       !self.screenRect(self.rect(for: .expanded)).insetBy(dx: -6, dy: -4).contains(NSEvent.mouseLocation) {
+                        self.collapse()
+                    }
+                }
+                pendingCollapse = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
+            }
+        case .rest:
+            // 悬浮岛体区域 → 立刻弹出
+            if screenRect(restRect).insetBy(dx: -14, dy: -10).contains(loc) {
+                expand()
+            }
+        case .hover:
+            if !(screenRect(hoverRect).insetBy(dx: -10, dy: -8).contains(loc)
+                || screenRect(expandedRect).insetBy(dx: -6, dy: -4).contains(loc)) {
+                goTo(.rest)
+            }
+        }
+    }
+
+    private func handleClick(_ e: NSEvent?) {
+        let loc = NSEvent.mouseLocation
+        switch mode {
+        case .expanded:
+            if !screenRect(rect(for: .expanded)).insetBy(dx: -8, dy: -8).contains(loc) {
+                collapse()
+            }
+        case .rest, .hover:
+            if screenRect(rect(for: mode)).insetBy(dx: -8, dy: -8).contains(loc) {
+                expand()
+            }
+        }
+    }
+
+    private func handleRightClick(_ e: NSEvent?) {
+        let loc = NSEvent.mouseLocation
+        let inIsland = screenRect(rect(for: mode)).insetBy(dx: -12, dy: -12).contains(loc)
+            || screenRect(restRect).insetBy(dx: -12, dy: -12).contains(loc)
+        guard inIsland else { return }
+
+        let menu = NSMenu()
+        if mode == .expanded {
+            let collapseItem = NSMenuItem(title: "Collapse", action: #selector(collapseAction), keyEquivalent: "")
+            collapseItem.target = self
+            menu.addItem(collapseItem)
+            menu.addItem(.separator())
+        }
+        let quit = NSMenuItem(title: "Quit Island Note", action: #selector(quitAction), keyEquivalent: "q")
+        quit.keyEquivalentModifierMask = [.command]
+        quit.target = self
+        menu.addItem(quit)
+        NSMenu.popUpContextMenu(menu, with: e ?? NSEvent(), for: island)
+    }
+
+    @objc private func collapseAction() { collapse() }
+    @objc private func quitAction() {
+        store.flushSync()
+        NSApp.terminate(nil)
+    }
+
+    // MARK: - 状态机
+
+    func expand() {
+        guard mode != .expanded else { return }
+        goTo(.expanded)
+        Haptics.expand()
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKey()
+        DispatchQueue.main.async { [weak self] in
+            self?.editor.focus()
+        }
+    }
+
+    func collapse() {
+        guard mode == .expanded else {
+            if mode == .hover { goTo(.rest) }
+            return
+        }
+        editor.flushPending()
+        store.flushSync()
+        goTo(.rest)
+        Haptics.collapse()
+        pendingCollapse?.cancel()
+        pendingCollapse = nil
+    }
+
+    /// 只动画遮罩形状（顶边恒定）。expanded 用弹簧回弹。
+    private func goTo(_ m: Mode) {
+        guard m != mode else { return }
+        pendingCollapse?.cancel()
+        pendingCollapse = nil
+        mode = m
+        hitGate.hitRect = rect(for: m)
+
+        // 只在展开态显示编辑器，收起时岛体是纯黑胶囊
+        let showEditor = (m == .expanded)
+        if showEditor {
+            editor.isHidden = false
+            editor.alphaValue = 1
+        } else {
+            editor.blur()
+            editor.alphaValue = 0
+            editor.isHidden = true
+        }
+
+        let (tR, bR) = radii(for: m)
+        let path = notchPath(rect(for: m), topR: tR, botR: bR)
+        let from = maskLayer.presentation()?.path ?? maskLayer.path
+
+        // 方案 A + 轻微缓入缓出（温和 S 曲线，不做成猛拐，避免咯噔）
+        let softEase = CAMediaTimingFunction(controlPoints: 0.25, 0.0, 0.35, 1.0)
+        let anim: CABasicAnimation
+        if m == .hover {
+            let s = CASpringAnimation(keyPath: "path")
+            s.mass = 1
+            s.stiffness = 140
+            s.damping = 22
+            s.initialVelocity = 0
+            s.duration = max(s.settlingDuration, 0.28)
+            s.timingFunction = softEase
+            anim = s
+        } else {
+            // 展开 / 收起：ζ≈0.88，几乎不过冲，尾部轻轻一「让」
+            let s = CASpringAnimation(keyPath: "path")
+            s.mass = 1
+            s.stiffness = 130
+            s.damping = 20
+            s.initialVelocity = 0
+            s.duration = max(s.settlingDuration, 0.58)
+            s.timingFunction = softEase
+            anim = s
+        }
+        anim.fromValue = from
+        anim.toValue = path
+        maskLayer.add(anim, forKey: "path")
+        maskLayer.path = path
+    }
+}
+
+// MARK: - 编辑器（纯文本，黑底）
+
+/// 文字区四边羽化：上下渐隐 + 左右软边。
+final class EdgeFeatherView: NSView {
+    override var isOpaque: Bool { false }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func layout() {
+        super.layout()
+        needsDisplay = true
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let b = bounds
+        guard b.width > 1, b.height > 1 else { return }
+        let clear = NSColor.black.withAlphaComponent(0)
+        let topH = min(72, b.height * 0.4)
+        let botH = min(64, b.height * 0.4)
+        let sideW = min(44, b.width * 0.18)
+
+        // 上下效果对调并反转
+        let topRect = NSRect(x: 0, y: b.maxY - topH, width: b.width, height: topH)
+        NSGradient(colors: [clear, NSColor.black])!.draw(in: topRect, angle: 90)
+
+        let botRect = NSRect(x: 0, y: 0, width: b.width, height: botH)
+        NSGradient(colors: [clear, NSColor.black])!.draw(in: botRect, angle: 270)
+
+        let leftRect = NSRect(x: 0, y: 0, width: sideW, height: b.height)
+        NSGradient(colors: [NSColor.black, clear])!.draw(in: leftRect, angle: 0)
+
+        let rightRect = NSRect(x: b.maxX - sideW, y: 0, width: sideW, height: b.height)
+        NSGradient(colors: [NSColor.black, clear])!.draw(in: rightRect, angle: 180)
+    }
+}
+
+final class NoteEditorView: NSView, NSTextViewDelegate {
+    private let scrollView = NSScrollView()
+    private let textView = NSTextView()
+    private let placeholder = NSTextField(labelWithString: "写点什么…")
+    private let savedDot = NSView()
+    private var savedPulse: DispatchWorkItem?
+
+    var onTextChanged: ((String) -> Void)?
+    var onRequestCollapse: (() -> Void)?
+    var onRequestQuit: (() -> Void)?
+    var onSavedPulse: (() -> Void)?
+
+    var string: String {
+        get { textView.string }
+        set {
+            textView.string = newValue
+            applyTypingStyle(to: textView.textStorage)
+            updatePlaceholder()
+        }
+    }
+
+    private func applyTypingStyle(to storage: NSTextStorage?) {
+        guard let storage, storage.length > 0 else {
+            if let font = textView.font {
+                let para = textView.defaultParagraphStyle ?? NSParagraphStyle()
+                textView.typingAttributes = [
+                    .font: font,
+                    .foregroundColor: NSColor(white: 0.92, alpha: 1),
+                    .paragraphStyle: para,
+                ]
+            }
+            return
+        }
+        let range = NSRange(location: 0, length: storage.length)
+        let para = textView.defaultParagraphStyle ?? NSParagraphStyle()
+        storage.addAttributes([
+            .font: NSFont.systemFont(ofSize: 15, weight: .regular),
+            .foregroundColor: NSColor(white: 0.92, alpha: 1),
+            .paragraphStyle: para,
+        ], range: range)
+    }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func setup() {
+        wantsLayer = true
+
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.scrollerStyle = .overlay
+        scrollView.autohidesScrollers = true
+        scrollView.automaticallyAdjustsContentInsets = false
+        // 末行必须能整体滚出底部 64px 渐隐带：滚到底时文本末端停在底边之上
+        // 64(inset) + 10(textContainerInset)px，正好整行落在全清区。
+        scrollView.contentInsets = NSEdgeInsets(top: 0, left: 0, bottom: 64, right: 0)
+
+        // 编辑器内容避开顶部岛缘
+        textView.frame = NSRect(x: 0, y: 0, width: 480, height: 280)
+        textView.isRichText = false
+        textView.allowsUndo = true
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isContinuousSpellCheckingEnabled = false
+        textView.usesFindBar = true
+        textView.isIncrementalSearchingEnabled = true
+        textView.delegate = self
+        textView.drawsBackground = false
+        // 与占位符同一套 padding：lineFragmentPadding=0，光标与「写点什么…」左对齐
+        textView.textContainer?.lineFragmentPadding = 0
+        textView.textContainerInset = NSSize(width: 36, height: 10)
+        let font = NSFont.systemFont(ofSize: 15, weight: .regular)
+        textView.font = font
+        let para = NSMutableParagraphStyle()
+        para.lineHeightMultiple = 1.5
+        para.minimumLineHeight = 22.5
+        para.maximumLineHeight = 22.5
+        textView.defaultParagraphStyle = para
+        textView.typingAttributes = [
+            .font: font,
+            .foregroundColor: NSColor(white: 0.92, alpha: 1),
+            .paragraphStyle: para,
+        ]
+        textView.textColor = NSColor(white: 0.92, alpha: 1)
+        textView.insertionPointColor = NSColor(white: 0.75, alpha: 1)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.widthTracksTextView = true
+        textView.minSize = .zero
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.selectedTextAttributes = [
+            .backgroundColor: NSColor(white: 1, alpha: 0.18),
+            .foregroundColor: NSColor(white: 0.95, alpha: 1),
+        ]
+
+        scrollView.documentView = textView
+
+        placeholder.translatesAutoresizingMaskIntoConstraints = false
+        placeholder.textColor = NSColor(white: 1, alpha: 0.28)
+        placeholder.font = NSFont.systemFont(ofSize: 15, weight: .regular)
+        placeholder.isEditable = false
+        placeholder.isBordered = false
+        placeholder.backgroundColor = .clear
+
+        savedDot.translatesAutoresizingMaskIntoConstraints = false
+        savedDot.wantsLayer = true
+        savedDot.layer?.backgroundColor = NSColor.systemGreen.withAlphaComponent(0).cgColor
+        savedDot.layer?.cornerRadius = 3
+
+        addSubview(scrollView)
+        addSubview(placeholder)
+        addSubview(savedDot)
+
+        // 四边羽化盖住整个文字视口（含裁切线）
+        let featherView = EdgeFeatherView(frame: .zero)
+        featherView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(featherView)
+
+        NSLayoutConstraint.activate([
+            // 顶部 40px 是纯空白区，文字/滚动都进不来
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scrollView.topAnchor.constraint(equalTo: topAnchor, constant: 40),
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
+
+            // 羽化层与 scrollView 同框，上下左右一起软边
+            featherView.leadingAnchor.constraint(equalTo: scrollView.leadingAnchor),
+            featherView.trailingAnchor.constraint(equalTo: scrollView.trailingAnchor),
+            featherView.topAnchor.constraint(equalTo: scrollView.topAnchor),
+            featherView.bottomAnchor.constraint(equalTo: scrollView.bottomAnchor),
+
+            placeholder.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 36),
+            placeholder.trailingAnchor.constraint(lessThanOrEqualTo: savedDot.leadingAnchor, constant: -8),
+            placeholder.topAnchor.constraint(equalTo: scrollView.topAnchor, constant: 12),
+
+            savedDot.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            savedDot.topAnchor.constraint(equalTo: topAnchor, constant: 16),
+            savedDot.widthAnchor.constraint(equalToConstant: 6),
+            savedDot.heightAnchor.constraint(equalToConstant: 6),
+        ])
+
+        updatePlaceholder()
+        textView.menu = buildContextMenu()
+    }
+
+    func focus() {
+        window?.makeFirstResponder(textView)
+        updatePlaceholder()
+    }
+
+    func blur() {
+        if window?.firstResponder === textView {
+            window?.makeFirstResponder(nil)
+        }
+    }
+
+    func flushPending() {
+        onTextChanged?(textView.string)
+    }
+
+    func flashSavedIndicator() {
+        savedPulse?.cancel()
+        savedDot.layer?.backgroundColor = NSColor.systemGreen.withAlphaComponent(0.9).cgColor
+        let work = DispatchWorkItem { [weak self] in
+            self?.savedDot.layer?.backgroundColor = NSColor.systemGreen.withAlphaComponent(0).cgColor
+        }
+        savedPulse = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
+    }
+
+    private func updatePlaceholder() {
+        placeholder.isHidden = !textView.string.isEmpty
+    }
+
+    /// Esc 收起；其余编辑键交给主菜单 / 文本视图，不在此拦截（避免误吞与系统提示音）。
+    func handleKey(_ event: NSEvent) -> NSEvent? {
+        if event.keyCode == 53 { // Esc
+            onRequestCollapse?()
+            return nil
+        }
+        // 空栈撤销/重做不调用，避免系统「滴」
+        if event.modifierFlags.contains(.command),
+           event.charactersIgnoringModifiers?.lowercased() == "z" {
+            let um = textView.undoManager
+            if event.modifierFlags.contains(.shift) {
+                if um?.canRedo == true { um?.redo() }
+            } else {
+                if um?.canUndo == true { um?.undo() }
+            }
+            return nil
+        }
+        return event
+    }
+
+    func buildContextMenu() -> NSMenu {
+        let menu = NSMenu()
+        let copy = NSMenuItem(title: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        copy.target = textView
+        menu.addItem(copy)
+        let paste = NSMenuItem(title: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        paste.target = textView
+        menu.addItem(paste)
+        let cut = NSMenuItem(title: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        cut.target = textView
+        menu.addItem(cut)
+        let all = NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        all.target = textView
+        menu.addItem(all)
+        menu.addItem(.separator())
+        let collapse = NSMenuItem(title: "Collapse", action: #selector(collapseFromMenu), keyEquivalent: "")
+        collapse.target = self
+        menu.addItem(collapse)
+        let quit = NSMenuItem(title: "Quit Island Note", action: #selector(quitFromMenu), keyEquivalent: "q")
+        quit.keyEquivalentModifierMask = [.command]
+        quit.target = self
+        menu.addItem(quit)
+        return menu
+    }
+
+    @objc private func collapseFromMenu() {
+        onRequestCollapse?()
+    }
+
+    @objc private func quitFromMenu() {
+        onRequestQuit?()
+    }
+
+    func textDidChange(_ notification: Notification) {
+        updatePlaceholder()
+        onTextChanged?(textView.string)
+    }
+}

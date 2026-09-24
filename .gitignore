@@ -1,0 +1,6 @@
+.build/
+IslandNote.app/
+.DS_Store
+*.xcodeproj
+.swiftpm/
+notes/scratch.txt
