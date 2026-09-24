@@ -501,18 +501,17 @@ final class EdgeFeatherView: NSView {
         let b = bounds
         guard b.width > 1, b.height > 1 else { return }
         let clear = NSColor.black.withAlphaComponent(0)
-        let topH = min(72, b.height * 0.4)
-        let botH = min(64, b.height * 0.4)
+        let verticalFadeH = min(64, b.height * 0.4)
         let sideW = min(44, b.width * 0.18)
 
         // 上下效果对调并反转
         if topFadeProgress > 0 {
-            let topRect = NSRect(x: 0, y: b.maxY - topH, width: b.width, height: topH)
+            let topRect = NSRect(x: 0, y: b.maxY - verticalFadeH, width: b.width, height: verticalFadeH)
             NSGradient(colors: [clear, NSColor.black.withAlphaComponent(topFadeProgress)])!
                 .draw(in: topRect, angle: 90)
         }
 
-        let botRect = NSRect(x: 0, y: 0, width: b.width, height: botH)
+        let botRect = NSRect(x: 0, y: 0, width: b.width, height: verticalFadeH)
         NSGradient(colors: [clear, NSColor.black])!.draw(in: botRect, angle: 270)
 
         let leftRect = NSRect(x: 0, y: 0, width: sideW, height: b.height)
