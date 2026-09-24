@@ -481,9 +481,14 @@ final class IslandNoteController: NSObject {
 
 // MARK: - Editor edge fade
 
-/// 文字区四边羽化：上下渐隐 + 左右软边。
+/// 文字区四边羽化；顶部只在内容滚出视口后渐显。
 final class EdgeFeatherView: NSView {
     override var isOpaque: Bool { false }
+    var topFadeProgress: CGFloat = 0 {
+        didSet {
+            if abs(topFadeProgress - oldValue) > 0.01 { needsDisplay = true }
+        }
+    }
 
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
@@ -501,8 +506,11 @@ final class EdgeFeatherView: NSView {
         let sideW = min(44, b.width * 0.18)
 
         // 上下效果对调并反转
-        let topRect = NSRect(x: 0, y: b.maxY - topH, width: b.width, height: topH)
-        NSGradient(colors: [clear, NSColor.black])!.draw(in: topRect, angle: 90)
+        if topFadeProgress > 0 {
+            let topRect = NSRect(x: 0, y: b.maxY - topH, width: b.width, height: topH)
+            NSGradient(colors: [clear, NSColor.black.withAlphaComponent(topFadeProgress)])!
+                .draw(in: topRect, angle: 90)
+        }
 
         let botRect = NSRect(x: 0, y: 0, width: b.width, height: botH)
         NSGradient(colors: [clear, NSColor.black])!.draw(in: botRect, angle: 270)

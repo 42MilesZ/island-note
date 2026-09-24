@@ -29,6 +29,7 @@ private struct MarkdownEditorHost: View {
         theme.strikethroughColor = theme.mutedText
         config.theme = theme
         config.textInsets = TextInsets(horizontal: 36, vertical: 10)
+        config.lists.indentPerLevel = 10
         config.safeAreaInsets = SafeAreaInsets(bottom: 64)
         config.spellChecking = SpellCheckingPolicy(
             continuousSpellChecking: false,
@@ -72,6 +73,9 @@ private struct MarkdownEditorHost: View {
 final class NoteEditorView: NSView {
     private let model = NoteEditorModel()
     private var hostingView: NSHostingView<MarkdownEditorHost>!
+    private weak var featherView: EdgeFeatherView?
+    private weak var observedClipView: NSClipView?
+    private var scrollObservation: NSObjectProtocol?
     private let savedDot = NSView()
     private var savedPulse: DispatchWorkItem?
 
@@ -118,6 +122,7 @@ final class NoteEditorView: NSView {
         addSubview(savedDot)
 
         let featherView = EdgeFeatherView(frame: .zero)
+        self.featherView = featherView
         featherView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(featherView)
 
@@ -147,8 +152,46 @@ final class NoteEditorView: NSView {
         return nil
     }
 
+    private func hostedScrollView(in view: NSView) -> NSScrollView? {
+        if let scrollView = view as? NSScrollView { return scrollView }
+        for child in view.subviews {
+            if let scrollView = hostedScrollView(in: child) { return scrollView }
+        }
+        return nil
+    }
+
+    private func observeScrollPosition() {
+        guard let scrollView = hostedScrollView(in: hostingView) else { return }
+        let clipView = scrollView.contentView
+        if observedClipView !== clipView {
+            if let scrollObservation { NotificationCenter.default.removeObserver(scrollObservation) }
+            observedClipView = clipView
+            clipView.postsBoundsChangedNotifications = true
+            scrollObservation = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: clipView,
+                queue: .main
+            ) { [weak self] _ in
+                self?.updateTopFade()
+            }
+        }
+        updateTopFade()
+    }
+
+    private func updateTopFade() {
+        guard let scrollView = hostedScrollView(in: hostingView) else { return }
+        let topY = -scrollView.contentInsets.top
+        let scrolled = max(0, scrollView.contentView.bounds.minY - topY)
+        featherView?.topFadeProgress = min(1, scrolled / 16)
+    }
+
+    deinit {
+        if let scrollObservation { NotificationCenter.default.removeObserver(scrollObservation) }
+    }
+
     func focus() {
         hostingView.layoutSubtreeIfNeeded()
+        observeScrollPosition()
         if let textView = hostedTextView(in: hostingView) {
             window?.makeFirstResponder(textView)
         }
