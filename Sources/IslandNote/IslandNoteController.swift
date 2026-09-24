@@ -501,17 +501,18 @@ final class EdgeFeatherView: NSView {
         let b = bounds
         guard b.width > 1, b.height > 1 else { return }
         let clear = NSColor.black.withAlphaComponent(0)
-        let verticalFadeH = min(64, b.height * 0.4)
+        let topFadeH = min(32, b.height * 0.4)
+        let bottomFadeH = min(64, b.height * 0.4)
         let sideW = min(44, b.width * 0.18)
 
-        // 上下效果对调并反转
+        // 视口顶边要完全遮住被裁切的文字；缩短渐变范围来减轻遮挡。
         if topFadeProgress > 0 {
-            let topRect = NSRect(x: 0, y: b.maxY - verticalFadeH, width: b.width, height: verticalFadeH)
-            NSGradient(colors: [clear, NSColor.black.withAlphaComponent(topFadeProgress * 0.55)])!
+            let topRect = NSRect(x: 0, y: b.maxY - topFadeH, width: b.width, height: topFadeH)
+            NSGradient(colors: [clear, NSColor.black.withAlphaComponent(topFadeProgress)])!
                 .draw(in: topRect, angle: 90)
         }
 
-        let botRect = NSRect(x: 0, y: 0, width: b.width, height: verticalFadeH)
+        let botRect = NSRect(x: 0, y: 0, width: b.width, height: bottomFadeH)
         NSGradient(colors: [clear, NSColor.black])!.draw(in: botRect, angle: 270)
 
         let leftRect = NSRect(x: 0, y: 0, width: sideW, height: b.height)
