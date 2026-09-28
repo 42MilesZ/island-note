@@ -6,6 +6,18 @@ struct FlomoMemo: Codable, Equatable {
     let updatedAt: String
 }
 
+/// Search previews are for selection only; sync always fetches the complete memo.
+struct FlomoMemoPreview: Equatable {
+    let id: String
+    let content: String
+    let updatedAt: String
+    let truncated: Bool
+}
+
+protocol FlomoSearching {
+    func search(keywords: String) async throws -> [FlomoMemoPreview]
+}
+
 protocol FlomoServing {
     func fetch(id: String) async throws -> FlomoMemo
     func create(content: String) async throws -> String
@@ -36,7 +48,7 @@ enum FlomoClientError: LocalizedError, Equatable {
 
 /// A small MCP client scoped to the three memo operations used by Island Note.
 /// Every operation opens its own session; no failed write is retried automatically.
-final class FlomoClient: FlomoServing {
+final class FlomoClient: FlomoServing, FlomoSearching {
     private static let endpoint = URL(string: "https://flomoapp.com/mcp")!
     private static let offeredVersion = "2025-11-25"
     private static let supportedVersions: Set<String> = ["2025-11-25", "2025-06-18", "2025-03-26"]
@@ -48,6 +60,20 @@ final class FlomoClient: FlomoServing {
     init(token: String, session: URLSession = .shared) {
         self.token = token
         self.session = session
+    }
+
+    func search(keywords: String) async throws -> [FlomoMemoPreview] {
+        let query = keywords.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return [] }
+        let result = try await call("memo_search", arguments: ["keywords": query, "limit": 50], isWrite: false)
+        if result["memos"] is NSNull { return [] }
+        guard let memos = result["memos"] as? [[String: Any]] else { throw FlomoClientError.incompleteMemo }
+        return try memos.map { memo in
+            guard let id = memo["id"] as? String, !id.isEmpty,
+                  let updated = memo["updated_at"] as? String else { throw FlomoClientError.incompleteMemo }
+            return FlomoMemoPreview(id: id, content: memo["content"] as? String ?? "(No text preview)",
+                                    updatedAt: updated, truncated: memo["content_truncated"] as? Bool ?? true)
+        }
     }
 
     func fetch(id: String) async throws -> FlomoMemo {

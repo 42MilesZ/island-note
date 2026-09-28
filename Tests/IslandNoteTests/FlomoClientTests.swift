@@ -41,6 +41,25 @@ final class FlomoClientTests: XCTestCase {
         XCTAssertEqual(methods, ["initialize", "notifications/initialized", "tools/call"])
     }
 
+    func testSearchUsesReadOnlyToolAndKeepsTruncatedPreviewSeparate() async throws {
+        let base = fixture(payload: ["memos": [[
+            "id": "existing-memo", "content": "Preview only", "updated_at": "v1", "content_truncated": true
+        ]]])
+        StubProtocol.handler = { request in
+            let body = try requestBody(request)
+            if body["method"] as? String == "tools/call" {
+                let params = try XCTUnwrap(body["params"] as? [String: Any])
+                XCTAssertEqual(params["name"] as? String, "memo_search")
+                let args = try XCTUnwrap(params["arguments"] as? [String: Any])
+                XCTAssertEqual(args["keywords"] as? String, "长期")
+                XCTAssertEqual(args["limit"] as? Int, 50)
+            }
+            return try base(request)
+        }
+        let matches = try await client().search(keywords: "  长期  ")
+        XCTAssertEqual(matches, [FlomoMemoPreview(id: "existing-memo", content: "Preview only", updatedAt: "v1", truncated: true)])
+    }
+
     func testFetchAcceptsNullOmittedIDs() async throws {
         StubProtocol.handler = fixture(payload: [
             "truncated": false, "omitted_ids": NSNull(), "memos": [[

@@ -199,6 +199,47 @@ final class FlomoSyncTests: XCTestCase {
         XCTAssertFalse(SyncDocument.transferFits("# " + String(repeating: "x", count: 29998)))
     }
 
+    func testMergeKeepsBothCopiesAndUpdatesSameMemoOnce() async throws {
+        let (sync, _) = try make()
+        let client = FakeFlomo()
+        client.memo = FlomoMemo(id: "test", content: "Flomo text", updatedAt: "v2")
+        var local = "Island text"
+        sync.readLocal = { local }
+        sync.applyRemote = { expected, replacement in
+            XCTAssertEqual(expected, local)
+            local = replacement
+        }
+        sync.start(client: client)
+        await sync.synchronize()
+        let conflict = try XCTUnwrap(sync.conflict)
+        await sync.synchronize(choice: .merge, reviewed: conflict)
+        XCTAssertEqual(local, "Island text\n\nFlomo text")
+        XCTAssertEqual(client.memo.content, "Flomo text")
+        XCTAssertEqual(sync.record.memoID, "test")
+        await sync.synchronize()
+        XCTAssertEqual(client.memo.content, local)
+        XCTAssertEqual(client.creates, 0)
+        XCTAssertEqual(client.updates, 1)
+        await sync.synchronize()
+        XCTAssertEqual(client.updates, 1)
+        sync.pause()
+    }
+
+    func testOversizedMergePreservesBothOriginals() async throws {
+        let (sync, _) = try make()
+        let client = FakeFlomo()
+        let local = String(repeating: "L", count: 20_000)
+        client.memo = FlomoMemo(id: "test", content: String(repeating: "R", count: 20_000), updatedAt: "v2")
+        sync.readLocal = { local }
+        sync.applyRemote = { _, _ in XCTFail("Oversized merge must not write") }
+        sync.start(client: client)
+        await sync.synchronize()
+        await sync.synchronize(choice: .merge, reviewed: try XCTUnwrap(sync.conflict))
+        XCTAssertEqual(client.updates, 0)
+        XCTAssertNotNil(sync.conflict)
+        sync.pause()
+    }
+
     func testHardBreaksAreNotSilentlyNormalizedAway() {
         XCTAssertEqual(SyncDocument.normalized("First  \nSecond\n"), "First  \nSecond")
         XCTAssertEqual(SyncDocument.normalized("First    \nSecond"), "First  \nSecond")

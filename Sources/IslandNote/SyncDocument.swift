@@ -49,6 +49,14 @@ enum SyncDocument {
         }.joined(separator: "\n"))
     }
 
+    static func merging(local: String, remote: String) -> String {
+        let left = normalized(local)
+        let right = normalized(remote)
+        if left == right || right.isEmpty { return left }
+        if left.isEmpty { return right }
+        return left + "\n\n" + right
+    }
+
     static func transferFits(_ text: String) -> Bool {
         let encoded = toFlomo(text)
         // Include the blank separators its editor may insert between list items.

@@ -9,7 +9,7 @@ struct SyncRecord: Codable, Equatable {
     var creationUncertain = false
 }
 
-enum SyncChoice { case local, remote }
+enum SyncChoice { case local, remote, merge }
 
 struct SyncConflict {
     let local: String
@@ -161,6 +161,24 @@ final class FlomoSync {
             if let choice {
                 guard let reviewed, reviewed.local == rawLocal, reviewed.remote == remote else {
                     showConflict(local: rawLocal, remote: remote, message: "A copy changed since review. Review the latest versions."); return
+                }
+                if choice == .merge {
+                    let merged = SyncDocument.merging(local: rawLocal, remote: remoteText)
+                    guard SyncDocument.issue(in: merged) == nil, SyncDocument.transferFits(merged) else {
+                        report("The merged note is too large or contains unsupported syntax. Both copies are preserved.", error: true); return
+                    }
+                    guard let applyRemote else { throw SyncFailure.localUnavailable }
+                    try backup(remote.content, name: "flomo-before-merge")
+                    try applyRemote(rawLocal, merged)
+                    // The existing remote version is the comparison baseline for
+                    // the next upload; fetch it again to detect intervening edits.
+                    record.baseline = remoteText
+                    record.pendingWrite = nil
+                    try persist()
+                    conflict = nil
+                    report("Merged locally; waiting to sync with Flomo…")
+                    localChanged()
+                    return
                 }
                 direction = choice == .local ? .push : .pull
             }
