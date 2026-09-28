@@ -2,6 +2,8 @@
 
 A small macOS scratchpad in a black capsule at the top of the screen. Hover to open it, write with live-rendered Markdown, and move away or press `Esc` to collapse it.
 
+While open, spread two fingers on the trackpad to enlarge the panel from 460 × 275 to 690 × 550 points (1.5× width, 2× height). Pinch inward to restore the default size. Each gesture switches once with a gentle spring and a haptic pulse; text stays the same size. The selected size is kept until the app quits. Double-click still selects text normally.
+
 ## Run
 
 Requires macOS 14 or later and Swift 5.9 or later.

@@ -1,4 +1,5 @@
 import AppKit
+import OSLog
 
 /// 命中放行：只在当前可见形状内接管点击，其余穿透到下方（菜单栏照常可点）。
 final class IslandView: NSView {
@@ -82,6 +83,11 @@ final class IslandNoteController: NSObject {
     private var restRect = NSRect.zero
     private var hoverRect = NSRect.zero
     private var expandedRect = NSRect.zero
+    private var panelSize: PanelSize = .standard
+    private var pinch = PanelPinch()
+    private var resizeTimer: Timer?
+    private var resizeEndsAt: CFTimeInterval = 0
+    private let logger = Logger(subsystem: "com.islandnote", category: "PanelResize")
 
     private let compactTopR: CGFloat = 10
     private let compactBotR: CGFloat = 20
@@ -188,15 +194,16 @@ final class IslandNoteController: NSObject {
 
         // 灵动岛比例取中：略扁略宽，不过分
         let barH: CGFloat = 33
-        panelH = 275
+        panelH = PanelSize.standard.dimensions.height
         gutter = 16
-        eW = 460
-        eH = panelH + gutter
+        // Keep the window fixed at the largest size, with room for spring overshoot.
+        eW = min(PanelSize.large.dimensions.width + gutter * 2, sf.width)
+        eH = min(PanelSize.large.dimensions.height + gutter, sf.height)
 
         let winFrame = NSRect(x: sf.midX - eW / 2, y: sf.maxY - eH, width: eW, height: eH)
 
         // 可见形状——顶边都 = eH（屏幕最顶），只向下生长
-        expandedRect = NSRect(x: 0, y: eH - panelH, width: eW, height: panelH)
+        expandedRect = expandedFrame(for: .standard)
         let restW = max(notchW * 1.06, 210) - 11
         restRect = NSRect(x: (eW - restW) / 2, y: eH - barH, width: restW, height: barH)
         hoverRect = NSRect(
@@ -237,7 +244,7 @@ final class IslandNoteController: NSObject {
         island.layer?.mask = maskLayer
 
         editor = NoteEditorView(frame: expandedRect)
-        editor.autoresizingMask = [.width, .height]
+        editor.autoresizingMask = []
         editor.onTextChanged = { [weak self] text in
             self?.store.save(text)
         }
@@ -303,12 +310,78 @@ final class IslandNoteController: NSObject {
             guard let self else { return e }
             return self.editor.handleKey(e) ?? e
         }
-        monitors = [g, l, gc, lc, gr, lr, lk].compactMap { $0 }
+        let lm = NSEvent.addLocalMonitorForEvents(matching: .magnify) { [weak self] e in
+            guard let self, e.window === self.panel, self.mode == .expanded else { return e }
+            return self.handleMagnify(e) ? nil : e
+        }
+        monitors = [g, l, gc, lc, gr, lr, lk, lm].compactMap { $0 }
+    }
+
+    private func expandedFrame(for size: PanelSize) -> NSRect {
+        let width = min(size.dimensions.width, eW)
+        let height = min(size.dimensions.height, eH - gutter)
+        return NSRect(x: (eW - width) / 2, y: eH - height, width: width, height: height)
+    }
+
+    private func handleMagnify(_ event: NSEvent) -> Bool {
+        let visible = maskLayer.presentation()?.path?.boundingBoxOfPath ?? expandedRect
+        guard pinch.isActive || visible.contains(event.locationInWindow) else { return false }
+        pendingCollapse?.cancel()
+        pendingCollapse = nil
+        if let target = pinch.update(delta: event.magnification, phase: event.phase, size: panelSize) {
+            resize(to: target)
+        }
+        return true
+    }
+
+    private func resize(to size: PanelSize) {
+        guard size != panelSize else { return }
+        panelSize = size
+        expandedRect = expandedFrame(for: size)
+        let path = notchPath(expandedRect, topR: expandedTopR, botR: expandedBotR)
+        let spring = shapeSpring(for: .expanded)
+        spring.fromValue = maskLayer.presentation()?.path ?? maskLayer.path
+        spring.toValue = path
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        maskLayer.path = path
+        maskLayer.add(spring, forKey: "path")
+        CATransaction.commit()
+
+        resizeTimer?.invalidate()
+        resizeEndsAt = CACurrentMediaTime() + spring.duration
+        // Layout follows the very same spring as the outline. This changes the
+        // viewport, not the text scale, and also keeps fades and hit testing aligned.
+        let timer = Timer(timeInterval: 1.0 / Double(max(60, panel.screen?.maximumFramesPerSecond ?? 60)), repeats: true) { [weak self] _ in
+            self?.updateResizeLayout()
+        }
+        resizeTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+        Haptics.resize()
+        logger.debug("Panel size: \(size.rawValue, privacy: .public)")
+    }
+
+    private func updateResizeLayout() {
+        let finished = CACurrentMediaTime() >= resizeEndsAt
+        let frame = finished ? expandedRect : (maskLayer.presentation()?.path?.boundingBoxOfPath ?? expandedRect)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        editor.frame = frame
+        editor.layoutSubtreeIfNeeded()
+        hitGate.hitRect = frame
+        CATransaction.commit()
+        if finished {
+            resizeTimer?.invalidate()
+            resizeTimer = nil
+        }
     }
 
     // MARK: - 悬停 / 点击
 
     private func handleHover() {
+        // Shrinking can move the edge past a stationary pointer. Wait for the
+        // gesture/animation to finish before accepting a new hover-exit movement.
+        guard !pinch.isActive, resizeTimer == nil else { return }
         let loc = NSEvent.mouseLocation
         switch mode {
         case .expanded:
@@ -429,6 +502,9 @@ final class IslandNoteController: NSObject {
     /// 只动画遮罩形状（顶边恒定）。expanded 用弹簧回弹。
     private func goTo(_ m: Mode) {
         guard m != mode else { return }
+        resizeTimer?.invalidate()
+        resizeTimer = nil
+        pinch.reset()
         pendingCollapse?.cancel()
         pendingCollapse = nil
         mode = m
@@ -437,6 +513,7 @@ final class IslandNoteController: NSObject {
         // 只在展开态显示编辑器，收起时岛体是纯黑胶囊
         let showEditor = (m == .expanded)
         if showEditor {
+            editor.frame = expandedRect
             editor.isHidden = false
             editor.alphaValue = 1
         } else {
@@ -449,9 +526,20 @@ final class IslandNoteController: NSObject {
         let path = notchPath(rect(for: m), topR: tR, botR: bR)
         let from = maskLayer.presentation()?.path ?? maskLayer.path
 
-        // 方案 A + 轻微缓入缓出（温和 S 曲线，不做成猛拐，避免咯噔）
+        let anim = shapeSpring(for: m)
+        anim.fromValue = from
+        anim.toValue = path
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        maskLayer.path = path
+        maskLayer.add(anim, forKey: "path")
+        CATransaction.commit()
+    }
+
+    private func shapeSpring(for m: Mode) -> CASpringAnimation {
+        // Reuse the existing gentle opening/closing spring for size changes.
         let softEase = CAMediaTimingFunction(controlPoints: 0.25, 0.0, 0.35, 1.0)
-        let anim: CABasicAnimation
+        let anim: CASpringAnimation
         if m == .hover {
             let s = CASpringAnimation(keyPath: "path")
             s.mass = 1
@@ -472,10 +560,7 @@ final class IslandNoteController: NSObject {
             s.timingFunction = softEase
             anim = s
         }
-        anim.fromValue = from
-        anim.toValue = path
-        maskLayer.add(anim, forKey: "path")
-        maskLayer.path = path
+        return anim
     }
 }
 

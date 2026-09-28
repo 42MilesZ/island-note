@@ -12,6 +12,7 @@ let package = Package(
             name: "IslandNote",
             dependencies: [.product(name: "MarkdownEngine", package: "swift-markdown-engine")],
             path: "Sources/IslandNote"
-        )
+        ),
+        .testTarget(name: "IslandNoteTests", dependencies: ["IslandNote"])
     ]
 )
