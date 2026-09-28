@@ -38,4 +38,18 @@ final class DocumentHeadingTests: XCTestCase {
         model.headings = DocumentHeading.parse("# One\n")
         XCTAssertFalse(model.isVisible)
     }
+
+    func testHiddenOutlineIgnoresHoverAndClearsStaleTarget() {
+        let model = HeadingOutlineModel()
+        model.headings = DocumentHeading.parse("# One\n\n## Two\n")
+        model.hover(model.headings[0].id)
+        XCTAssertNil(model.hoveredID)
+        model.headings = DocumentHeading.parse("# One\n\n## Two\n\n### Three\n")
+        model.hover(model.headings[0].id)
+        XCTAssertEqual(model.hoveredID, model.headings[0].id)
+        model.headings = Array(model.headings.prefix(2))
+        XCTAssertNil(model.hoveredID)
+        model.hover(model.headings[0].id)
+        XCTAssertNil(model.hoveredID)
+    }
 }

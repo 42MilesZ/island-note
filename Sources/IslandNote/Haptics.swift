@@ -6,10 +6,6 @@ enum Haptics {
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
     }
 
-    static func outlineNavigate() {
-        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
-    }
-
     static func resize() {
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
     }

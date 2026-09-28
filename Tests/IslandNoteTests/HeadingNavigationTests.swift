@@ -23,6 +23,34 @@ final class HeadingNavigationTests: XCTestCase {
         try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
     }
 
+    func testOutlineAppearsWhenTypingThirdHeadingAfterOpening() throws {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 275), styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let editor = NoteEditorView(frame: NSRect(x: 0, y: 0, width: 460, height: 275))
+        window.contentView = editor
+        editor.isHidden = true
+        editor.alphaValue = 0
+        editor.string = "# First heading\n\nReadable body text.\n\n## Second heading\n\nMore body text.\n"
+        editor.setEditingEnabled(true)
+        settle()
+        editor.isHidden = false
+        editor.alphaValue = 1
+        editor.focus()
+        settle()
+        XCTAssertFalse(editor.outlineModel.isVisible)
+        try snapshot(editor, name: "outline-two-headings")
+        let text = try XCTUnwrap(find(NSTextView.self, in: editor))
+        text.insertText("\n### Third heading\n", replacementRange: NSRange(location: (text.string as NSString).length, length: 0))
+        settle(0.7)
+        XCTAssertEqual(editor.outlineModel.headings.count, 3)
+        XCTAssertTrue(editor.outlineModel.isVisible)
+        editor.outlineModel.hoveredID = editor.outlineModel.headings[1].id
+        settle()
+        try snapshot(editor, name: "outline-third-heading-added")
+        window.close()
+    }
+
     func testNativeNavigationAndResizePreserveTextAndSelection() throws {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 275), styleMask: .borderless, backing: .buffered, defer: false)

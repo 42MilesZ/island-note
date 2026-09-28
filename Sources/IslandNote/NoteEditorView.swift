@@ -191,9 +191,6 @@ final class NoteEditorView: NSView {
         stopNavigation()
         indexedSource = source
         outlineModel.headings = DocumentHeading.parse(source)
-        if !outlineModel.headings.contains(where: { $0.id == outlineModel.hoveredID }) {
-            outlineModel.hoveredID = nil
-        }
         headingPositions = []
         scheduleHeadingGeometry()
         logger.debug("Indexed \(self.outlineModel.headings.count) headings")
@@ -259,7 +256,6 @@ final class NoteEditorView: NSView {
         var proposed = clip.bounds
         proposed.origin.y = position.y - scroll.contentInsets.top - 12
         let target = clip.constrainBoundsRect(proposed).origin
-        Haptics.outlineNavigate()
         logger.debug("Navigate to heading at source offset \(heading.offset)")
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             clip.scroll(to: target)

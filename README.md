@@ -4,7 +4,7 @@ A small macOS scratchpad in a black capsule at the top of the screen. Hover to o
 
 While open, spread two fingers on the trackpad to enlarge the panel from 460 × 275 to 690 × 550 points (1.5× width, 2× height). Pinch inward to restore the default size. Each gesture switches once with a gentle spring and a haptic pulse; text stays the same size. The selected size is kept until the app quits. Double-click still selects text normally.
 
-Notes with three or more Markdown headings show a small outline in the left margin. Bar lengths reflect heading levels, and the current section is highlighted as you scroll. Hover a bar to preview its title; click to scroll smoothly to that section without moving the text selection. Hover and navigation have light haptic feedback. Longer outlines can scroll independently, and Reduce Motion is respected.
+Notes with three or more Markdown headings show a small outline in the left margin. Bar lengths reflect heading levels, and the current section is highlighted as you scroll. Hover a bar to preview its title with a light haptic tick; click to scroll smoothly to that section without moving the text selection or adding another haptic pulse. Below three headings, the outline is hidden and does not respond to hovering. Longer outlines can scroll independently, and Reduce Motion is respected.
 
 ## Run
 

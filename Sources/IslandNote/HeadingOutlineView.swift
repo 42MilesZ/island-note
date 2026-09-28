@@ -2,7 +2,13 @@ import AppKit
 import SwiftUI
 
 final class HeadingOutlineModel: ObservableObject {
-    @Published var headings: [DocumentHeading] = []
+    @Published var headings: [DocumentHeading] = [] {
+        didSet {
+            if let hoveredID, headings.count < 3 || !headings.contains(where: { $0.id == hoveredID }) {
+                self.hoveredID = nil
+            }
+        }
+    }
     @Published var activeID: Int?
     @Published var hoveredID: Int?
     var onNavigate: ((DocumentHeading) -> Void)?
@@ -11,6 +17,10 @@ final class HeadingOutlineModel: ObservableObject {
     var isVisible: Bool { headings.count >= 3 }
 
     func hover(_ id: Int?) {
+        guard isVisible, id == nil || headings.contains(where: { $0.id == id }) else {
+            hoveredID = nil
+            return
+        }
         guard hoveredID != id else { return }
         hoveredID = id
         // One light tick when entering a heading; no pulses during scrolling.
@@ -25,6 +35,7 @@ final class HeadingOutlineModel: ObservableObject {
 struct HeadingOutline: View {
     @ObservedObject var model: HeadingOutlineModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private let rowHeight: CGFloat = 18
 
     private var motion: Animation {
         reduceMotion ? .linear(duration: 0.12) : .spring(response: 0.38, dampingFraction: 0.8)
@@ -35,17 +46,17 @@ struct HeadingOutline: View {
             ScrollViewReader { reader in
                 ScrollView(.vertical) {
                     VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(model.headings.enumerated()), id: \.element.id) { index, heading in
+                        ForEach(model.isVisible ? Array(model.headings.enumerated()) : [], id: \.element.id) { index, heading in
                             row(heading, index: index)
                                 .id(heading.id)
                                 .zIndex(model.hoveredID == heading.id ? 1 : 0)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 12)
+                    .padding(.vertical, 16)
                 }
                 .scrollIndicators(.hidden)
-                .frame(height: min(geometry.size.height, CGFloat(model.headings.count) * 22 + 24))
+                .frame(height: min(geometry.size.height, CGFloat(model.headings.count) * rowHeight + 32))
                 .frame(maxHeight: .infinity, alignment: .center)
                 .onChange(of: model.activeID) { _, id in
                     guard model.hoveredID == nil, let id else { return }
@@ -54,6 +65,7 @@ struct HeadingOutline: View {
             }
         }
         .opacity(model.isVisible ? 1 : 0)
+        .allowsHitTesting(model.isVisible)
         .animation(motion, value: model.isVisible)
         .animation(motion, value: model.hoveredID)
         .animation(motion, value: model.activeID)
@@ -72,8 +84,8 @@ struct HeadingOutline: View {
         } label: {
             Capsule()
                 .fill(Color.white.opacity(hovered ? 1 : active ? 0.88 : 0.26 + emphasis * 0.28))
-                .frame(width: baseWidth + (active ? 3 : 0) + emphasis * 12, height: hovered || active ? 3 : 2)
-                .frame(width: 22, height: 22, alignment: .leading)
+                .frame(width: baseWidth + (active ? 3 : 0) + emphasis * 12, height: hovered || active ? 2 : 1.5)
+                .frame(width: 22, height: rowHeight, alignment: .leading)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -84,7 +96,7 @@ struct HeadingOutline: View {
         .overlay(alignment: .leading) {
             if hovered {
                 Text(heading.title)
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(.white.opacity(0.95))
                     .lineLimit(2)
                     .padding(.horizontal, 11)
