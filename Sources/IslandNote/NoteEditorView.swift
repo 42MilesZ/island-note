@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import MarkdownEngine
+import OSLog
 
 extension Notification.Name {
     static let islandNoteBold = Notification.Name("IslandNote.applyBold")
@@ -78,6 +79,15 @@ final class NoteEditorView: NSView {
     private var scrollObservation: NSObjectProtocol?
     private let savedDot = NSView()
     private var savedPulse: DispatchWorkItem?
+    let outlineModel = HeadingOutlineModel()
+    private var outlineRefresh: DispatchWorkItem?
+    private var geometryRefresh: DispatchWorkItem?
+    private var indexedSource = ""
+    private var headingPositions: [(id: Int, y: CGFloat)] = []
+    private var lastLayoutWidth: CGFloat = 0
+    private var navigationTimer: Timer?
+    private var scrollMonitor: Any?
+    private let logger = Logger(subsystem: "local.projects.island-note", category: "Outline")
 
     var onTextChanged: ((String) -> Void)?
     var onRequestCollapse: (() -> Void)?
@@ -85,7 +95,10 @@ final class NoteEditorView: NSView {
 
     var string: String {
         get { model.text }
-        set { model.text = newValue }
+        set {
+            model.text = newValue
+            refreshOutline(newValue)
+        }
     }
 
     func setEditingEnabled(_ enabled: Bool) {
@@ -104,7 +117,14 @@ final class NoteEditorView: NSView {
         wantsLayer = true
         let root = MarkdownEditorHost(
             model: model,
-            onTextChanged: { [weak self] text in self?.onTextChanged?(text) },
+            onTextChanged: { [weak self] text in
+                guard let self else { return }
+                self.onTextChanged?(text)
+                self.outlineRefresh?.cancel()
+                let work = DispatchWorkItem { [weak self] in self?.refreshOutline(text) }
+                self.outlineRefresh = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+            },
             onBuildContextMenu: { [weak self] menu, _ in
                 self?.appendAppMenuItems(to: menu)
                 return menu
@@ -126,6 +146,15 @@ final class NoteEditorView: NSView {
         featherView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(featherView)
 
+        let outline = HeadingOutlineHost(model: outlineModel)
+        outline.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(outline)
+        outlineModel.onNavigate = { [weak self] heading in self?.navigate(to: heading) }
+        scrollMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDown, .keyDown, .magnify]) { [weak self] event in
+            if let self, event.window === self.window { self.stopNavigation() }
+            return event
+        }
+
         NSLayoutConstraint.activate([
             hostingView.leadingAnchor.constraint(equalTo: leadingAnchor),
             hostingView.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -137,11 +166,122 @@ final class NoteEditorView: NSView {
             featherView.topAnchor.constraint(equalTo: hostingView.topAnchor),
             featherView.bottomAnchor.constraint(equalTo: hostingView.bottomAnchor),
 
+            outline.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            outline.topAnchor.constraint(equalTo: hostingView.topAnchor, constant: 4),
+            outline.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -24),
+            outline.widthAnchor.constraint(equalToConstant: 264),
+
             savedDot.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
             savedDot.topAnchor.constraint(equalTo: topAnchor, constant: 16),
             savedDot.widthAnchor.constraint(equalToConstant: 6),
             savedDot.heightAnchor.constraint(equalToConstant: 6),
         ])
+    }
+
+    override func layout() {
+        super.layout()
+        if abs(bounds.width - lastLayoutWidth) > 0.5 {
+            lastLayoutWidth = bounds.width
+            scheduleHeadingGeometry()
+        }
+    }
+
+    private func refreshOutline(_ source: String) {
+        guard source != indexedSource else { return }
+        stopNavigation()
+        indexedSource = source
+        outlineModel.headings = DocumentHeading.parse(source)
+        if !outlineModel.headings.contains(where: { $0.id == outlineModel.hoveredID }) {
+            outlineModel.hoveredID = nil
+        }
+        headingPositions = []
+        scheduleHeadingGeometry()
+        logger.debug("Indexed \(self.outlineModel.headings.count) headings")
+    }
+
+    private func scheduleHeadingGeometry() {
+        geometryRefresh?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.refreshHeadingGeometry() }
+        geometryRefresh = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work)
+    }
+
+    private func refreshHeadingGeometry() {
+        guard outlineModel.isVisible, let textView = hostedTextView(in: hostingView),
+              textView.string == indexedSource,
+              let layout = textView.textLayoutManager,
+              let content = layout.textContentManager,
+              let documentView = textView.enclosingScrollView?.documentView else { return }
+        layout.ensureLayout(for: layout.documentRange)
+        headingPositions = outlineModel.headings.compactMap { heading in
+            guard let location = content.location(layout.documentRange.location, offsetBy: heading.offset) else { return nil }
+            var y: CGFloat?
+            layout.enumerateTextLayoutFragments(from: location, options: [.ensuresLayout]) { fragment in
+                let frame = fragment.layoutFragmentFrame.offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
+                y = textView.convert(frame, to: documentView).minY
+                return false
+            }
+            return y.map { (heading.id, $0) }
+        }
+        updateActiveHeading()
+    }
+
+    private func updateActiveHeading() {
+        guard let scroll = hostedScrollView(in: hostingView), !headingPositions.isEmpty else { return }
+        let clip = scroll.contentView
+        let readingY = clip.bounds.minY + scroll.contentInsets.top + 24
+        var bottom = clip.bounds
+        bottom.origin.y = clip.documentRect.maxY
+        let lastOrigin = clip.constrainBoundsRect(bottom).minY
+        // A short final section cannot align to the top of a tall viewport.
+        let atEnd = lastOrigin > -scroll.contentInsets.top + 1 && clip.bounds.minY >= lastOrigin - 1
+        let active = atEnd ? headingPositions.last?.id
+            : (headingPositions.last(where: { $0.y <= readingY })?.id ?? headingPositions.first?.id)
+        if outlineModel.activeID != active { outlineModel.activeID = active }
+    }
+
+    func navigate(to requested: DocumentHeading) {
+        guard let textView = hostedTextView(in: hostingView), let scroll = textView.enclosingScrollView else { return }
+        // An edit may be newer than the debounced index. Resolve the same title
+        // again rather than scrolling to an obsolete source offset.
+        outlineRefresh?.cancel()
+        refreshOutline(textView.string)
+        guard let heading = outlineModel.headings.filter({ $0.title == requested.title })
+            .min(by: { abs($0.offset - requested.offset) < abs($1.offset - requested.offset) }) else { return }
+        stopNavigation()
+        refreshHeadingGeometry()
+        guard let position = headingPositions.first(where: { $0.id == heading.id }) else {
+            logger.error("Heading navigation could not resolve text layout")
+            return
+        }
+        let clip = scroll.contentView
+        let start = clip.bounds.origin
+        var proposed = clip.bounds
+        proposed.origin.y = position.y - scroll.contentInsets.top - 12
+        let target = clip.constrainBoundsRect(proposed).origin
+        Haptics.outlineNavigate()
+        logger.debug("Navigate to heading at source offset \(heading.offset)")
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            clip.scroll(to: target)
+            scroll.reflectScrolledClipView(clip)
+            return
+        }
+        let began = ProcessInfo.processInfo.systemUptime
+        let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self, weak scroll] _ in
+            guard let self, let scroll else { return }
+            let progress = min(1, (ProcessInfo.processInfo.systemUptime - began) / 0.42)
+            let eased = 1 - pow(1 - progress, 3)
+            scroll.contentView.scroll(to: NSPoint(x: start.x, y: start.y + (target.y - start.y) * eased))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            if progress >= 1 { self.stopNavigation() }
+        }
+        navigationTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopNavigation() {
+        navigationTimer?.invalidate()
+        navigationTimer = nil
     }
 
     private func hostedTextView(in view: NSView) -> NSTextView? {
@@ -183,21 +323,29 @@ final class NoteEditorView: NSView {
         let topY = -scrollView.contentInsets.top
         let scrolled = max(0, scrollView.contentView.bounds.minY - topY)
         featherView?.topFadeProgress = min(1, scrolled / 16)
+        updateActiveHeading()
     }
 
     deinit {
+        outlineRefresh?.cancel()
+        geometryRefresh?.cancel()
+        navigationTimer?.invalidate()
+        if let scrollMonitor { NSEvent.removeMonitor(scrollMonitor) }
         if let scrollObservation { NotificationCenter.default.removeObserver(scrollObservation) }
     }
 
     func focus() {
         hostingView.layoutSubtreeIfNeeded()
         observeScrollPosition()
+        scheduleHeadingGeometry()
         if let textView = hostedTextView(in: hostingView) {
             window?.makeFirstResponder(textView)
         }
     }
 
     func blur() {
+        stopNavigation()
+        outlineModel.hoveredID = nil
         if window?.firstResponder === hostedTextView(in: hostingView) {
             window?.makeFirstResponder(nil)
         }
