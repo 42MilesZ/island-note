@@ -16,6 +16,7 @@ final class IslandView: NSView {
 final class IslandPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+    var onSyncSettings: (() -> Void)?
 
     /// nonactivatingPanel 下菜单 keyEquivalent 不稳，这里显式把编辑命令派给 firstResponder；
     /// 其余 ⌘ 组合吞掉，避免系统「滴」声。
@@ -50,6 +51,9 @@ final class IslandPanel: NSPanel {
                 if um?.canUndo == true { um?.undo() }
             }
             return true
+        case ",":
+            onSyncSettings?()
+            return true
         case "q":
             NSApp.terminate(nil)
             return true
@@ -61,8 +65,11 @@ final class IslandPanel: NSPanel {
 
 /// 固定岛体 + 只动画遮罩形状（借鉴 Spirit NotchApp）。
 /// 所有形态顶边钉在屏幕最顶 → 展开/收回不裂缝。
+@MainActor
 final class IslandNoteController: NSObject {
     private let store: NoteStore
+    private var sync: FlomoSync?
+    private var showingSyncSettings = false
 
     // 窗口与岛体
     private var panel: IslandPanel!
@@ -107,6 +114,7 @@ final class IslandNoteController: NSObject {
         installMainMenu()
         setup()
         bindStore()
+        setupSync()
     }
 
     /// 主菜单 Edit：让 ⌘C/V/X/A/Z 走标准 responder，少一层拦截。
@@ -128,6 +136,9 @@ final class IslandNoteController: NSObject {
 
         let appItem = NSMenuItem()
         let appMenu = NSMenu(title: "Island Note")
+        let syncItem = NSMenuItem(title: "Flomo Sync…", action: #selector(showSyncSettings), keyEquivalent: ",")
+        syncItem.target = self
+        appMenu.addItem(syncItem)
         let quit = NSMenuItem(title: "Quit Island Note", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appMenu.addItem(quit)
         appItem.submenu = appMenu
@@ -219,6 +230,7 @@ final class IslandNoteController: NSObject {
             backing: .buffered,
             defer: false
         )
+        panel.onSyncSettings = { [weak self] in self?.showSyncSettings() }
         panel.level = .screenSaver
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -254,6 +266,7 @@ final class IslandNoteController: NSObject {
         editor.onRequestQuit = {
             NSApp.terminate(nil)
         }
+        editor.onRequestSync = { [weak self] in self?.showSyncSettings() }
         // 编辑器只覆盖可见形状（expandedRect）：底边 = 遮罩底边，
         // 原先铺满全窗口时底部 16px gutter 成了「滚得到但永远看不见」的死区。
         editor.frame = expandedRect
@@ -353,7 +366,7 @@ final class IslandNoteController: NSObject {
         // Layout follows the very same spring as the outline. This changes the
         // viewport, not the text scale, and also keeps fades and hit testing aligned.
         let timer = Timer(timeInterval: 1.0 / Double(max(60, panel.screen?.maximumFramesPerSecond ?? 60)), repeats: true) { [weak self] _ in
-            self?.updateResizeLayout()
+            MainActor.assumeIsolated { self?.updateResizeLayout() }
         }
         resizeTimer = timer
         RunLoop.main.add(timer, forMode: .common)
@@ -379,6 +392,7 @@ final class IslandNoteController: NSObject {
     // MARK: - 悬停 / 点击
 
     private func handleHover() {
+        guard !showingSyncSettings else { return }
         // Shrinking can move the edge past a stationary pointer. Wait for the
         // gesture/animation to finish before accepting a new hover-exit movement.
         guard !pinch.isActive, resizeTimer == nil else { return }
@@ -435,6 +449,9 @@ final class IslandNoteController: NSObject {
         guard inIsland else { return }
 
         let menu = NSMenu()
+        let syncItem = NSMenuItem(title: "Flomo Sync…", action: #selector(showSyncSettings), keyEquivalent: "")
+        syncItem.target = self
+        menu.addItem(syncItem)
         if mode == .expanded {
             let collapseItem = NSMenuItem(title: "Collapse", action: #selector(collapseAction), keyEquivalent: "")
             collapseItem.target = self
@@ -466,6 +483,7 @@ final class IslandNoteController: NSObject {
             editor.showSaveError("Could not read \(store.path): \(error.localizedDescription)")
         }
         goTo(.expanded)
+        sync?.request()
         Haptics.expand()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKey()
@@ -497,6 +515,47 @@ final class IslandNoteController: NSObject {
 
     func flushEditor() {
         editor.flushPending()
+    }
+
+    private func setupSync() {
+        do {
+            let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
+                                                        appropriateFor: nil, create: true).appendingPathComponent("IslandNote")
+            let sync = try FlomoSync(stateURL: directory.appendingPathComponent("flomo-sync.json"))
+            self.sync = sync
+            sync.onStatus = { [weak self] status, error in self?.editor.showSyncStatus(status, error: error) }
+            sync.readLocal = { [weak self] in
+                guard let self else { throw SyncFailure.localUnavailable }
+                guard !self.editor.hasMarkedText else { throw SyncFailure.localChanged }
+                self.editor.flushPending()
+                guard self.store.flushSync() else { throw SyncFailure.localUnavailable }
+                if let updated = try self.store.refreshIfClean() { self.editor.replaceFromSync(updated) }
+                return self.editor.string
+            }
+            sync.applyRemote = { [weak self, weak sync] expected, replacement in
+                guard let self, let sync else { throw SyncFailure.localUnavailable }
+                self.editor.flushPending()
+                guard self.editor.string == expected, self.store.flushSync() else { throw SyncFailure.localChanged }
+                try sync.backup(expected, name: "island-note-before-pull")
+                try self.store.applySyncedText(replacement, expected: expected)
+                self.editor.replaceFromSync(replacement)
+            }
+            store.onSyncNeeded = { [weak sync] in sync?.localChanged() }
+            if let token = try FlomoCredential.load() { sync.start(client: FlomoClient(token: token)) }
+        } catch {
+            editor.showSyncStatus("Flomo setup unavailable: \(error.localizedDescription)", error: true)
+        }
+    }
+
+    @objc func showSyncSettings() {
+        guard let sync else { FlomoSettings.error("Sync settings could not be loaded. Your local note is still available."); return }
+        pendingCollapse?.cancel()
+        pendingCollapse = nil
+        showingSyncSettings = true
+        defer { showingSyncSettings = false }
+        editor.flushPending()
+        guard store.flushSync() else { return }
+        FlomoSettings.show(sync)
     }
 
     /// 只动画遮罩形状（顶边恒定）。expanded 用弹簧回弹。

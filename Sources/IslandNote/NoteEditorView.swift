@@ -17,6 +17,7 @@ private struct MarkdownEditorHost: View {
     @ObservedObject var model: NoteEditorModel
     let onTextChanged: (String) -> Void
     let onBuildContextMenu: (NSMenu, NSRange) -> NSMenu
+    let onLimitExceeded: () -> Void
 
     private static let configuration: MarkdownEditorConfiguration = {
         var config = MarkdownEditorConfiguration.default
@@ -50,6 +51,16 @@ private struct MarkdownEditorHost: View {
             text: Binding(
                 get: { model.text },
                 set: { newText in
+                    if SyncDocument.count(newText) > SyncDocument.limit,
+                       SyncDocument.count(newText) >= SyncDocument.count(model.text) {
+                        // Also catches smart-input expansions and edits that bypass
+                        // the normal text binding. Keep the engine’s native delegate
+                        // intact for Chinese composition and list editing.
+                        let retained = model.text
+                        model.text = retained
+                        onLimitExceeded()
+                        return
+                    }
                     model.text = newText
                     onTextChanged(newText)
                 }
@@ -79,6 +90,7 @@ final class NoteEditorView: NSView {
     private var scrollObservation: NSObjectProtocol?
     private let savedDot = NSView()
     private var savedPulse: DispatchWorkItem?
+    private let syncButton = NSButton(title: "Connect Flomo…", target: nil, action: nil)
     let outlineModel = HeadingOutlineModel()
     private var outlineRefresh: DispatchWorkItem?
     private var geometryRefresh: DispatchWorkItem?
@@ -92,6 +104,7 @@ final class NoteEditorView: NSView {
     var onTextChanged: ((String) -> Void)?
     var onRequestCollapse: (() -> Void)?
     var onRequestQuit: (() -> Void)?
+    var onRequestSync: (() -> Void)?
 
     var string: String {
         get { model.text }
@@ -128,6 +141,10 @@ final class NoteEditorView: NSView {
             onBuildContextMenu: { [weak self] menu, _ in
                 self?.appendAppMenuItems(to: menu)
                 return menu
+            },
+            onLimitExceeded: { [weak self] in
+                if let self { self.hostedTextView(in: self.hostingView)?.undoManager?.removeAllActions() }
+                self?.showSaveError("30,000-character limit. The added text was not saved.")
             }
         )
         hostingView = NSHostingView(rootView: root)
@@ -140,6 +157,14 @@ final class NoteEditorView: NSView {
         savedDot.layer?.backgroundColor = NSColor.systemGreen.withAlphaComponent(0).cgColor
         savedDot.layer?.cornerRadius = 3
         addSubview(savedDot)
+
+        syncButton.translatesAutoresizingMaskIntoConstraints = false
+        syncButton.isBordered = false
+        syncButton.font = .systemFont(ofSize: 10)
+        syncButton.contentTintColor = .secondaryLabelColor
+        syncButton.target = self
+        syncButton.action = #selector(openSyncSettings)
+        addSubview(syncButton)
 
         let featherView = EdgeFeatherView(frame: .zero)
         self.featherView = featherView
@@ -175,6 +200,9 @@ final class NoteEditorView: NSView {
             savedDot.topAnchor.constraint(equalTo: topAnchor, constant: 16),
             savedDot.widthAnchor.constraint(equalToConstant: 6),
             savedDot.heightAnchor.constraint(equalToConstant: 6),
+            syncButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 36),
+            syncButton.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            syncButton.trailingAnchor.constraint(lessThanOrEqualTo: savedDot.leadingAnchor, constant: -12),
         ])
     }
 
@@ -183,6 +211,24 @@ final class NoteEditorView: NSView {
         if abs(bounds.width - lastLayoutWidth) > 0.5 {
             lastLayoutWidth = bounds.width
             scheduleHeadingGeometry()
+        }
+    }
+
+    func showSyncStatus(_ status: String, error: Bool) {
+        syncButton.title = error ? "Flomo · Needs attention" : status.hasPrefix("Synced") ? "Flomo · Synced" : status
+        syncButton.toolTip = status
+        syncButton.contentTintColor = error ? .systemOrange : .secondaryLabelColor
+    }
+
+    func replaceFromSync(_ text: String) {
+        let view = hostedTextView(in: hostingView)
+        let selection = view?.selectedRange()
+        view?.undoManager?.removeAllActions()
+        string = text
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let view = self.hostedTextView(in: self.hostingView) else { return }
+            view.undoManager?.removeAllActions()
+            if let selection { view.setSelectedRange(NSRange(location: min(selection.location, (text as NSString).length), length: 0)) }
         }
     }
 
@@ -347,6 +393,8 @@ final class NoteEditorView: NSView {
         }
     }
 
+    var hasMarkedText: Bool { hostedTextView(in: hostingView)?.hasMarkedText() ?? false }
+
     func flushPending() {
         onTextChanged?(model.text)
     }
@@ -388,6 +436,9 @@ final class NoteEditorView: NSView {
     }
 
     private func appendAppMenuItems(to menu: NSMenu) {
+        let sync = NSMenuItem(title: "Flomo Sync…", action: #selector(openSyncSettings), keyEquivalent: "")
+        sync.target = self
+        menu.addItem(sync)
         menu.addItem(.separator())
         let bold = NSMenuItem(title: "Bold", action: #selector(applyBold), keyEquivalent: "b")
         bold.target = self
@@ -408,4 +459,5 @@ final class NoteEditorView: NSView {
     @objc private func applyItalic() { NotificationCenter.default.post(name: .islandNoteItalic, object: nil) }
     @objc private func collapseFromMenu() { onRequestCollapse?() }
     @objc private func quitFromMenu() { onRequestQuit?() }
+    @objc private func openSyncSettings() { onRequestSync?() }
 }

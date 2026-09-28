@@ -1,4 +1,5 @@
 import AppKit
+import MarkdownEngine
 import XCTest
 @testable import IslandNote
 
@@ -21,6 +22,37 @@ final class HeadingNavigationTests: XCTestCase {
         editor.cacheDisplay(in: editor.bounds, to: bitmap)
         let png = try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
         try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
+    }
+
+    func testNativeEditorRejectsOversizedPasteWithoutTruncating() throws {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 275), styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let editor = NoteEditorView(frame: window.contentView!.bounds)
+        window.contentView = editor
+        editor.string = "Original text"
+        editor.setEditingEnabled(true)
+        editor.layoutSubtreeIfNeeded()
+        settle()
+        editor.focus()
+        let text = try XCTUnwrap(find(NSTextView.self, in: editor))
+        XCTAssertTrue(text.delegate is NativeTextViewCoordinator, "The engine owns its IME and list coordinator")
+        text.insertText(String(repeating: "x", count: 30_001), replacementRange: NSRange(location: 0, length: 0))
+        settle()
+        XCTAssertEqual(text.string, "Original text")
+        XCTAssertEqual(editor.string, "Original text")
+        text.insertText("New ", replacementRange: NSRange(location: 0, length: 0))
+        settle()
+        XCTAssertEqual(text.string, "New Original text")
+        XCTAssertEqual(editor.string, "New Original text")
+        text.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertTrue(editor.hasMarkedText)
+        text.insertText("你", replacementRange: text.markedRange())
+        text.unmarkText()
+        settle()
+        XCTAssertFalse(editor.hasMarkedText)
+        XCTAssertEqual(editor.string, "你New Original text")
+        window.close()
     }
 
     func testOutlineAppearsWhenTypingThirdHeadingAfterOpening() throws {

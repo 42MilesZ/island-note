@@ -25,6 +25,7 @@ final class NoteStore {
     private(set) var lastErrorMessage: String?
 
     var onSaved: (() -> Void)?
+    var onSyncNeeded: (() -> Void)?
     var onSaveError: ((String) -> Void)?
 
     init(fileURL: URL? = nil) {
@@ -71,15 +72,12 @@ final class NoteStore {
         guard let text = pending else { return true }
         do {
             guard let baseline = lastLoadedContent else { throw SaveError.documentNotLoaded }
-            let diskText = try String(contentsOf: fileURL, encoding: .utf8)
-            if diskText != baseline {
-                throw SaveError.changedOutsideApp
-            }
-            try text.write(to: fileURL, atomically: true, encoding: .utf8)
+            try coordinatedWrite(text, expected: baseline)
             lastLoadedContent = text
             pending = nil
             lastErrorMessage = nil
             onSaved?()
+            onSyncNeeded?()
             return true
         } catch {
             let message = "Could not save to \(fileURL.path): \(error.localizedDescription)"
@@ -88,5 +86,28 @@ final class NoteStore {
             onSaveError?(message)
             return false
         }
+    }
+
+    func applySyncedText(_ text: String, expected: String) throws {
+        guard pending == nil, lastLoadedContent == expected else { throw SyncFailure.localChanged }
+        try coordinatedWrite(text, expected: expected)
+        lastLoadedContent = text
+        lastErrorMessage = nil
+        onSaved?()
+    }
+
+    private func coordinatedWrite(_ text: String, expected: String) throws {
+        var coordinationError: NSError?
+        var writeError: Error?
+        NSFileCoordinator().coordinate(writingItemAt: fileURL, options: .forReplacing,
+                                       error: &coordinationError) { url in
+            do {
+                let disk = try String(contentsOf: url, encoding: .utf8)
+                guard disk == expected else { throw SaveError.changedOutsideApp }
+                try text.write(to: url, atomically: true, encoding: .utf8)
+            } catch { writeError = error }
+        }
+        if let coordinationError { throw coordinationError }
+        if let writeError { throw writeError }
     }
 }

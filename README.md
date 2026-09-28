@@ -16,6 +16,20 @@ make run
 
 `make package` builds `IslandNote.app` without opening it.
 
+## Flomo sync
+
+Open **Connect Flomo…** in the panel, **Flomo Sync…** in the app/context menu, or press **⌘,** while editing. Enter your [Flomo MAX personal token](https://help.flomoapp.com/advance/mcp/token.html) in the secure field. The token stays in macOS Keychain, separate from Codex's connector. Leave the memo field empty to create one dedicated memo, or enter an existing memo URL/ID. Connecting an unequal existing memo asks which complete version to keep.
+
+Island Note sends saved edits after 3 seconds of inactivity and checks Flomo every 60 seconds while the app runs, and whenever the panel opens. Changes on either side sync automatically when only one copy has changed since the last verified sync. If both changed, click the status to review both copies. Pause/resume and Sync Now are available in settings. Closing the app stops synchronization; the local file still saves immediately.
+
+The document limit is **30,000 Unicode scalars**. Oversized edits are rejected as a whole, never truncated. Existing larger files remain readable and can be shortened. Flomo needs a small amount of extra room for heading escapes and list spacing near the limit, so a full local document may need shortening to sync.
+
+The tested profile is paragraphs, `#`–`######` headings, `**bold**`, and ordered/unordered lists. Heading markers are escaped in transport so they remain literal text in Flomo and return as Markdown headings in Island Note. Extra blank lines, loose-list separators, and cosmetic trailing whitespace are normalized; Markdown's two-space hard breaks are retained. Checkboxes, tables, code blocks, blockquotes, Markdown links/images and wiki-links pause sync until removed; the local source is still saved, with no automatic conversion. Other formatting is subject to exact normalized readback verification. Flomo attachments and incomplete/truncated reads always block sync.
+
+Every upload is read back before accepting a new shared baseline. Updates include Flomo's version timestamp. Network failures retain pending work; an uncertain create is never retried automatically, to avoid duplicate memos. If a create's response is lost, find the created memo in Flomo and enter its URL. Empty notes never erase the other copy automatically. Pulls check the editor and disk again, skip active input composition, and use macOS file coordination. Editors that do not participate in file coordination can still race at the filesystem level; avoid editing the same file in multiple apps simultaneously.
+
+Sync state and replacement backups are local to `~/Library/Application Support/IslandNote/` (`flomo-sync.json` and `Sync Backups/`). Backups are kept before remote pulls and explicit replacements. Logs use the `local.projects.island-note` subsystem with category `FlomoSync`; they contain state/error messages, never the token or document body.
+
 ## Storage
 
 Island Note edits one document directly in the local Obsidian vault:
