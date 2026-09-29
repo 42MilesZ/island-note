@@ -139,6 +139,14 @@ final class HeadingNavigationTests: XCTestCase {
                 settle(0.2)
                 try snapshot(editor, name: name)
             }
+            editor.showSyncStatus(.synced, detail: "Both copies match")
+            editor.flashSavedIndicator()
+            settle(0.2)
+            try snapshot(editor, name: "status-local-saved")
+            editor.showSaveError("Local file is unavailable")
+            editor.showSyncStatus(.synced, detail: "Both copies match")
+            settle(0.2)
+            try snapshot(editor, name: "status-local-error")
         }
         let rail = try XCTUnwrap(find(HeadingOutlineHost.self, in: editor))
         XCTAssertNil(rail.hitTest(NSPoint(x: rail.frame.minX + 50, y: rail.frame.midY)), "Preview must not steal text clicks")

@@ -88,7 +88,10 @@ final class NoteEditorView: NSView {
     private weak var featherView: EdgeFeatherView?
     private weak var observedClipView: NSClipView?
     private var scrollObservation: NSObjectProtocol?
-    private let savedDot = NSView()
+    private let statusDot = CALayer()
+    private var syncDetail = "Flomo is not connected. Click to set up sync."
+    private var localSaveError: String?
+    private var showingSavePulse = false
     private var savedPulse: DispatchWorkItem?
     private var displayedSyncPhase = SyncPhase.disconnected
     private let syncButton = NSButton(title: "", target: nil, action: nil)
@@ -153,25 +156,20 @@ final class NoteEditorView: NSView {
         hostingView.appearance = NSAppearance(named: .darkAqua)
         addSubview(hostingView)
 
-        savedDot.translatesAutoresizingMaskIntoConstraints = false
-        savedDot.wantsLayer = true
-        savedDot.layer?.backgroundColor = NSColor.systemGreen.withAlphaComponent(0).cgColor
-        savedDot.layer?.cornerRadius = 3
-        addSubview(savedDot)
-
         syncButton.translatesAutoresizingMaskIntoConstraints = false
         syncButton.isBordered = false
         syncButton.font = .systemFont(ofSize: 11, weight: .medium)
         syncButton.appearance = NSAppearance(named: .darkAqua)
-        syncButton.imagePosition = .imageOnly
         syncButton.toolTip = "Connect Flomo — click to set up sync"
         syncButton.setAccessibilityLabel("Connect Flomo")
-        syncButton.image = NSImage(systemSymbolName: SyncPhase.disconnected.symbol, accessibilityDescription: nil)
         syncButton.wantsLayer = true
-        syncButton.contentTintColor = .secondaryLabelColor
         syncButton.target = self
         syncButton.action = #selector(openSyncSettings)
         addSubview(syncButton)
+        statusDot.frame = CGRect(x: 9, y: 9, width: 6, height: 6)
+        statusDot.cornerRadius = 3
+        syncButton.layer?.addSublayer(statusDot)
+        refreshStatusIndicator()
 
         let featherView = EdgeFeatherView(frame: .zero)
         self.featherView = featherView
@@ -203,15 +201,10 @@ final class NoteEditorView: NSView {
             outline.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -24),
             outline.widthAnchor.constraint(equalToConstant: 264),
 
-            savedDot.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
-            savedDot.topAnchor.constraint(equalTo: topAnchor, constant: 16),
-            savedDot.widthAnchor.constraint(equalToConstant: 6),
-            savedDot.heightAnchor.constraint(equalToConstant: 6),
-            syncButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 36),
-            syncButton.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            syncButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -15),
+            syncButton.topAnchor.constraint(equalTo: topAnchor, constant: 7),
             syncButton.widthAnchor.constraint(equalToConstant: 24),
             syncButton.heightAnchor.constraint(equalToConstant: 24),
-            syncButton.trailingAnchor.constraint(lessThanOrEqualTo: savedDot.leadingAnchor, constant: -12),
         ])
     }
 
@@ -224,30 +217,48 @@ final class NoteEditorView: NSView {
     }
 
     func showSyncStatus(_ phase: SyncPhase, detail: String) {
-        let changed = displayedSyncPhase != phase
         displayedSyncPhase = phase
-        syncButton.title = ""
-        syncButton.image = NSImage(systemSymbolName: phase.symbol, accessibilityDescription: nil)
-        syncButton.toolTip = phase.title + "\n" + detail + "\nClick for details and actions."
-        syncButton.setAccessibilityLabel(phase.title)
-        syncButton.setAccessibilityHelp(detail)
-        syncButton.contentTintColor = phase.needsAction ? NSColor(red: 0.94, green: 0.70, blue: 0.38, alpha: 1)
-            : NSColor(white: phase == .synced ? 0.48 : 0.66, alpha: 1)
-        syncButton.layer?.removeAnimation(forKey: "sync-busy")
-        if phase.isBusy, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            let pulse = CABasicAnimation(keyPath: "opacity")
-            pulse.fromValue = 0.5
-            pulse.toValue = 1
-            pulse.duration = 0.8
-            pulse.autoreverses = true
-            pulse.repeatCount = .infinity
-            syncButton.layer?.add(pulse, forKey: "sync-busy")
-        }
-        if changed, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            let fade = CATransition()
-            fade.type = .fade
+        syncDetail = detail
+        refreshStatusIndicator()
+    }
+
+    private func refreshStatusIndicator() {
+        let phase = displayedSyncPhase
+        let localDetail = localSaveError.map { "Local save failed: " + $0 }
+            ?? (showingSavePulse ? "Saved locally just now." : "Local save and Flomo sync")
+        let details = localDetail + "\n" + phase.title + "\n" + syncDetail
+        syncButton.toolTip = details + "\nClick for details and actions."
+        syncButton.setAccessibilityLabel(localSaveError == nil ? phase.title : "Local save failed")
+        syncButton.setAccessibilityHelp(details)
+
+        // A local write failure must remain visible even if Flomo reports success.
+        // A successful local save must not hide a sync conflict or connection error.
+        let color: NSColor
+        if localSaveError != nil { color = .systemRed }
+        else if phase.needsAction { color = NSColor(red: 0.94, green: 0.70, blue: 0.38, alpha: 1) }
+        else if showingSavePulse { color = NSColor(red: 0.55, green: 0.80, blue: 0.67, alpha: 1) }
+        else { color = NSColor(white: phase.isBusy ? 0.68 : 0.40, alpha: 1) }
+        let previousColor = statusDot.presentation()?.backgroundColor ?? statusDot.backgroundColor
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        statusDot.backgroundColor = color.cgColor
+        CATransaction.commit()
+        statusDot.removeAnimation(forKey: "sync-busy")
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            let fade = CABasicAnimation(keyPath: "backgroundColor")
+            fade.fromValue = previousColor
+            fade.toValue = color.cgColor
             fade.duration = 0.18
-            syncButton.layer?.add(fade, forKey: "sync-state")
+            statusDot.add(fade, forKey: "status-color")
+            if phase.isBusy, !showingSavePulse, localSaveError == nil {
+                let pulse = CABasicAnimation(keyPath: "opacity")
+                pulse.fromValue = 0.4
+                pulse.toValue = 1
+                pulse.duration = 0.8
+                pulse.autoreverses = true
+                pulse.repeatCount = .infinity
+                statusDot.add(pulse, forKey: "sync-busy")
+            }
         }
     }
 
@@ -432,10 +443,13 @@ final class NoteEditorView: NSView {
 
     func flashSavedIndicator() {
         savedPulse?.cancel()
-        savedDot.toolTip = nil
-        savedDot.layer?.backgroundColor = NSColor.systemGreen.withAlphaComponent(0.9).cgColor
+        localSaveError = nil
+        showingSavePulse = true
+        refreshStatusIndicator()
         let work = DispatchWorkItem { [weak self] in
-            self?.savedDot.layer?.backgroundColor = NSColor.systemGreen.withAlphaComponent(0).cgColor
+            guard let self else { return }
+            self.showingSavePulse = false
+            self.refreshStatusIndicator()
         }
         savedPulse = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
@@ -443,8 +457,9 @@ final class NoteEditorView: NSView {
 
     func showSaveError(_ message: String) {
         savedPulse?.cancel()
-        savedDot.toolTip = message
-        savedDot.layer?.backgroundColor = NSColor.systemRed.cgColor
+        showingSavePulse = false
+        localSaveError = message
+        refreshStatusIndicator()
     }
 
     /// Esc closes the island; undo stays scoped to the editor's document.
@@ -490,5 +505,12 @@ final class NoteEditorView: NSView {
     @objc private func applyItalic() { NotificationCenter.default.post(name: .islandNoteItalic, object: nil) }
     @objc private func collapseFromMenu() { onRequestCollapse?() }
     @objc private func quitFromMenu() { onRequestQuit?() }
-    @objc private func openSyncSettings() { onRequestSync?() }
+    @objc private func openSyncSettings() {
+        if let localSaveError {
+            let alert = NSAlert()
+            alert.messageText = "Local save failed"
+            alert.informativeText = localSaveError
+            alert.runModal()
+        } else { onRequestSync?() }
+    }
 }

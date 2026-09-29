@@ -256,18 +256,47 @@ final class FlomoSyncTests: XCTestCase {
         sync.pause()
     }
 
-    func testRemoteParagraphEditUsesItsOwnVerifiedBaseline() {
+    func testFormattingOnlyChangesDoNotRequireReview() {
         let localBase = "Line one\nLine two"
         let remoteBase = "Line one\n\nLine two"
         XCTAssertEqual(SyncComparison.direction(baseline: localBase, remoteBaseline: remoteBase,
                                                 local: localBase, remote: remoteBase), .none)
         XCTAssertEqual(SyncComparison.direction(baseline: localBase, remoteBaseline: remoteBase,
-                                                local: "Edited locally", remote: remoteBase), .push)
+                                                local: "Edited locally", remote: localBase), .push)
         XCTAssertEqual(SyncComparison.direction(baseline: localBase, remoteBaseline: remoteBase,
-                                                local: "Edited locally", remote: "Line one\nLine two"), .conflict)
-        XCTAssertEqual(SyncComparison.direction(baseline: "Line one\nLine two", remoteBaseline: "Line one\nLine two",
-                                                local: "Line one\nLine two", remote: "Line one\n\nLine two"), .pull)
-        XCTAssertEqual(SyncComparison.direction(baseline: nil, local: localBase, remote: remoteBase), .conflict)
+                                                local: localBase, remote: "Edited remotely"), .pull)
+        XCTAssertEqual(SyncComparison.direction(baseline: localBase, remoteBaseline: remoteBase,
+                                                local: "Local edit", remote: "Remote edit"), .conflict)
+        XCTAssertEqual(SyncComparison.direction(baseline: nil, local: localBase, remote: remoteBase), .none)
+    }
+
+    func testKnownLegacyUploadLossRepairsOnceWithoutReview() async throws {
+        let local = "Folder~name\n-"
+        let (sync, _) = try make(SyncRecord(enabled: true, memoID: "test", baseline: "Base", pendingWrite: local))
+        let client = FakeFlomo()
+        client.memo = FlomoMemo(id: "test", content: "Foldername", updatedAt: "v2")
+        sync.readLocal = { local }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(client.updates, 1)
+        XCTAssertNil(sync.conflict)
+        XCTAssertEqual(sync.phase, .synced)
+        await sync.synchronize()
+        XCTAssertEqual(client.updates, 1)
+        sync.pause()
+    }
+
+    func testUnexpectedTextLossStillRequiresReview() async throws {
+        let local = "Keep every word"
+        let (sync, _) = try make(SyncRecord(enabled: true, memoID: "test", baseline: "Base", pendingWrite: local))
+        let client = FakeFlomo()
+        client.memo = FlomoMemo(id: "test", content: "Keep word", updatedAt: "v2")
+        sync.readLocal = { local }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(client.updates, 0)
+        XCTAssertNotNil(sync.conflict)
+        sync.pause()
     }
 
     func testInterruptedMergeRecoversWithoutAppendingAgain() async throws {

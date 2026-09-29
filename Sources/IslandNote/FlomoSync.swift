@@ -13,6 +13,7 @@ struct SyncRecord: Codable, Equatable {
     var baseline: String?
     var remoteBaseline: String?
     var pendingWrite: String?
+    var pendingEncodedContent: String?
     var pendingMerge: PendingMerge?
     var creationUncertain = false
     var lastVerifiedAt: Date?
@@ -29,15 +30,15 @@ enum SyncDirection: Equatable { case none, push, pull, conflict }
 
 enum SyncComparison {
     static func direction(baseline: String?, remoteBaseline: String? = nil, local: String, remote: String) -> SyncDirection {
-        if local == remote { return .none }
+        if SyncDocument.equivalent(local: local, remote: remote) { return .none }
         guard let baseline else { return .conflict }
-        let localChanged = local != baseline
+        let localChanged = !SyncDocument.equivalent(local: baseline, remote: local)
         guard let remoteBaseline else {
             // Old records lack the exact remote representation; don't assume
             // formatting differences are changes safe to pull automatically.
-            return remote == baseline ? .push : .conflict
+            return SyncDocument.equivalent(local: baseline, remote: remote) ? .push : .conflict
         }
-        let remoteChanged = remote != remoteBaseline
+        let remoteChanged = !SyncDocument.equivalent(local: remoteBaseline, remote: remote)
         if !localChanged && !remoteChanged { return .none }
         if !localChanged { return .pull }
         if !remoteChanged { return .push }
@@ -146,6 +147,7 @@ final class FlomoSync {
                 }
                 record.creationUncertain = true
                 record.pendingWrite = local
+                record.pendingEncodedContent = SyncDocument.toFlomo(local)
                 try persist() // Record intent before a potentially ambiguous network result.
                 report("Creating one dedicated Flomo memo…", phase: .syncing)
                 let id = try await client.create(content: SyncDocument.toFlomo(local))
@@ -179,12 +181,20 @@ final class FlomoSync {
                 try persist()
             }
             let wasAwaitingVerification = record.pendingWrite != nil || recoveredMerge
+            var repairLegacyUpload = false
             if let pending = record.pendingWrite {
                 if SyncDocument.equivalent(local: pending, remote: remoteText) {
                     record.remoteBaseline = remoteText
                     record.baseline = pending
                     record.pendingWrite = nil
+                    record.pendingEncodedContent = nil
                     try persist()
+                } else if SyncDocument.isLegacyTransportLoss(local: pending, remote: remoteText),
+                          record.pendingEncodedContent != SyncDocument.toFlomo(pending) {
+                    // Retry a known old encoder defect once with the corrected
+                    // payload, conditional on this exact remote version. Any
+                    // other content change still requires review.
+                    repairLegacyUpload = true
                 } else if choice == nil {
                     showConflict(local: rawLocal, remote: remote,
                                  message: "The last write could not be verified. Review both copies before continuing.", phase: .verifyWrite)
@@ -192,7 +202,7 @@ final class FlomoSync {
                 }
             }
 
-            var direction = SyncComparison.direction(baseline: record.baseline, remoteBaseline: record.remoteBaseline, local: local, remote: remoteText)
+            var direction = repairLegacyUpload ? .push : SyncComparison.direction(baseline: record.baseline, remoteBaseline: record.remoteBaseline, local: local, remote: remoteText)
             if let choice {
                 guard let reviewed, reviewed.local == rawLocal, reviewed.remote == remote else {
                     showConflict(local: rawLocal, remote: remote, message: "A copy changed since review. Review the latest versions."); return
@@ -216,6 +226,7 @@ final class FlomoSync {
                     record.remoteBaseline = remoteText
                     record.baseline = remoteText
                     record.pendingWrite = nil
+                    record.pendingEncodedContent = nil
                     record.pendingMerge = nil
                     try persist()
                     conflict = nil
@@ -233,9 +244,10 @@ final class FlomoSync {
                 record.remoteBaseline = remoteText
                 record.baseline = local
                 record.pendingWrite = nil
+                record.pendingEncodedContent = nil
                 try persist()
                 conflict = nil
-                report("The local document and linked Flomo memo match.", phase: .synced)
+                report("Both copies are up to date.", phase: .synced)
             case .pull:
                 guard let applyRemote else { throw SyncFailure.localUnavailable }
                 try applyRemote(rawLocal, remoteText)
@@ -243,6 +255,7 @@ final class FlomoSync {
                 record.remoteBaseline = remoteText
                 record.baseline = remoteText
                 record.pendingWrite = nil
+                record.pendingEncodedContent = nil
                 try persist()
                 conflict = nil
                 report("Flomo changes were saved to the local document.", phase: .synced)
@@ -252,7 +265,9 @@ final class FlomoSync {
                 }
                 // Preserve the remote version before an explicit replacement.
                 if choice != nil { try backup(remote.content, name: "flomo-before-replacement") }
+                if repairLegacyUpload { try backup(remote.content, name: "flomo-before-format-repair") }
                 record.pendingWrite = local
+                record.pendingEncodedContent = SyncDocument.toFlomo(local)
                 try persist()
                 report("Uploading local changes and verifying the saved memo…", phase: .syncing)
                 try await client.update(id: id, content: SyncDocument.toFlomo(local), updatedAt: remote.updatedAt)
@@ -269,18 +284,20 @@ final class FlomoSync {
                 record.remoteBaseline = SyncDocument.fromFlomo(verified.content)
                 record.baseline = local
                 record.pendingWrite = nil
+                record.pendingEncodedContent = nil
                 try persist()
                 conflict = nil
                 if editedDuringUpload {
                     report("The earlier upload was verified. New local edits are waiting to sync.", phase: .waiting)
                     localChanged()
-                } else { report("The local document and linked Flomo memo match.", phase: .synced) }
+                } else { report("Both copies are up to date.", phase: .synced) }
             }
         } catch {
             guard generation == epoch else { return }
             if record.memoID == nil, error as? FlomoClientError == .authentication {
                 record.creationUncertain = false
                 record.pendingWrite = nil
+                record.pendingEncodedContent = nil
                 try? persist()
             }
             // No network failure advances the baseline. A write intent is retained.

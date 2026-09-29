@@ -28,20 +28,6 @@ enum SyncPhase: Equatable {
         }
     }
 
-    var symbol: String {
-        switch self {
-        case .disconnected: return "link"
-        case .waiting: return "clock"
-        case .checking, .syncing: return "arrow.triangle.2.circlepath"
-        case .synced: return "checkmark.circle"
-        case .paused: return "pause.circle"
-        case .mergeRequired, .conflict: return "arrow.triangle.merge"
-        case .connectionFailed: return "wifi.exclamationmark"
-        case .authorizationRequired: return "key"
-        default: return "exclamationmark.circle"
-        }
-    }
-
     var isBusy: Bool { self == .checking || self == .syncing }
     var needsAction: Bool {
         switch self {

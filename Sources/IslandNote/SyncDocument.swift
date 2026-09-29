@@ -39,50 +39,64 @@ enum SyncDocument {
         // Flomo removes unsupported HTML heading elements on a manual save.
         // Escape only the leading marker so headings remain ordinary text there.
         normalized(text).components(separatedBy: "\n").map { line in
-            // A list item whose only content is a dash was dropped by Flomo.
-            // Send it as literal text instead of a list item.
-            if line == "- -" { return "\\- -" }
-            return line.range(of: #"^#{1,6}\s+"#, options: .regularExpression) != nil ? "\\" + line : line
+            // Empty draft list items have been dropped by Flomo. Send them as
+            // literal text so a later edit can still recover the placeholder.
+            let literal: String
+            if isEmptyDraftBullet(line) {
+                let indentation = line.prefix(while: { $0 == " " || $0 == "\t" })
+                literal = indentation + "\\" + line.dropFirst(indentation.count)
+            } else {
+                literal = line.range(of: #"^#{1,6}\s+"#, options: .regularExpression) != nil
+                    ? "\\" + line : line
+            }
+            // A tilde between word characters can be parsed as formatting and
+            // deleted by Flomo. An existing Markdown escape already protects it.
+            return literal.replacingOccurrences(of: #"(?<=[\p{L}\p{N}_])~(?=[\p{L}\p{N}_])"#,
+                                                with: #"\\~"#, options: .regularExpression)
         }.joined(separator: "\n")
     }
 
     static func fromFlomo(_ text: String) -> String {
         normalized(text.components(separatedBy: "\n").map { line in
-            if line == "\\- -" { return "- -" }
-            let heading = line.range(of: ##"^\\#{1,6}\s+"##, options: .regularExpression) != nil
-                ? String(line.dropFirst()) : line
-            return unwrapBareURLs(in: heading)
+            let indentation = line.prefix(while: { $0 == " " || $0 == "\t" })
+            let body = line.dropFirst(indentation.count)
+            let escapedLiteral = body.hasPrefix("\\") && isEmptyDraftBullet(String(indentation) + String(body.dropFirst()))
+            let escapedHeading = line.range(of: ##"^\\#{1,6}\s+"##, options: .regularExpression) != nil
+            let decoded = escapedLiteral ? String(indentation) + String(body.dropFirst()) :
+                (escapedHeading ? String(line.dropFirst()) : line)
+            return unwrapBareURLs(in: decoded.replacingOccurrences(
+                of: #"(?<=[\p{L}\p{N}_])\\~(?=[\p{L}\p{N}_])"#, with: "~", options: .regularExpression))
         }.joined(separator: "\n"))
     }
 
     /// Compare a local document with a decoded Flomo document without rewriting
-    /// either one. Flomo adds some paragraph separators and changes harmless
-    /// Markdown escapes; missing words, list items, or local paragraph breaks
-    /// still differ. `remote` should already have passed through `fromFlomo`.
+    /// either one. Blank lines and empty draft bullets are cosmetic in the
+    /// supported profile. Nonempty list content, indentation, and formatting
+    /// still have to match. `remote` has already passed through `fromFlomo`.
     static func equivalent(local: String, remote: String) -> Bool {
+        comparisonLines(local) == comparisonLines(remote)
+    }
+
+    /// Recognize the old transport's specific loss of word-internal tildes.
+    /// This must only be used to repair an already pending upload after a
+    /// version-checked readback, never to absorb arbitrary remote edits.
+    static func isLegacyTransportLoss(local: String, remote: String) -> Bool {
         let left = comparisonLines(local)
         let right = comparisonLines(remote)
-        var i = 0
-        var j = 0
-        while i < left.count && j < right.count {
-            if left[i] == right[j] { i += 1; j += 1; continue }
-            // An extra single blank line in Flomo is a known editor artifact
-            // after headings or between ordinary text lines. Never discard a
-            // blank line from the local source.
-            if right[j].isEmpty, j > 0, j + 1 < right.count,
-               !right[j - 1].isEmpty, !right[j + 1].isEmpty,
-               isHeading(right[j - 1]) ||
-               (listKind(right[j - 1]) == nil && listKind(right[j + 1]) == nil) {
-                j += 1
-                continue
+        guard left.count == right.count, left != right else { return false }
+        var lostTilde = false
+        for (expected, actual) in zip(left, right) {
+            guard matchesWithLegacyTildeLoss(expected: expected, actual: actual, lostTilde: &lostTilde) else {
+                return false
             }
-            return false
         }
-        return i == left.count && j == right.count
+        return lostTilde
     }
 
     private static func comparisonLines(_ text: String) -> [String] {
-        normalized(text).components(separatedBy: "\n").map { line in
+        normalized(text).components(separatedBy: "\n")
+            .filter { !$0.isEmpty && !isEmptyDraftBullet($0) }
+            .map { line in
             var compared = line
             let indentation = compared.prefix(while: { $0 == " " || $0 == "\t" })
             let body = compared.dropFirst(indentation.count)
@@ -97,8 +111,30 @@ enum SyncDocument {
         }
     }
 
-    private static func isHeading(_ line: String) -> Bool {
-        line.range(of: #"^#{1,6}\s+"#, options: .regularExpression) != nil
+    private static func isEmptyDraftBullet(_ line: String) -> Bool {
+        line.range(of: #"^\s*(?:[-+*]|-\s+-|\d+[.)])\s*$"#, options: .regularExpression) != nil
+    }
+
+    private static func matchesWithLegacyTildeLoss(expected: String, actual: String, lostTilde: inout Bool) -> Bool {
+        let left = Array(expected)
+        let right = Array(actual)
+        var i = 0
+        var j = 0
+        while i < left.count {
+            if j < right.count, left[i] == right[j] { i += 1; j += 1; continue }
+            if left[i] == "~", i > 0, i + 1 < left.count,
+               isWordCharacter(left[i - 1]), isWordCharacter(left[i + 1]) {
+                lostTilde = true
+                i += 1
+                continue
+            }
+            return false
+        }
+        return j == right.count
+    }
+
+    private static func isWordCharacter(_ character: Character) -> Bool {
+        character == "_" || character.unicodeScalars.allSatisfy(CharacterSet.alphanumerics.contains)
     }
 
     private static func unwrapBareURLs(in line: String) -> String {
