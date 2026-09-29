@@ -94,7 +94,10 @@ final class NoteEditorView: NSView {
     private var showingSavePulse = false
     private var savedPulse: DispatchWorkItem?
     private var displayedSyncPhase = SyncPhase.disconnected
-    private let syncButton = NSButton(title: "", target: nil, action: nil)
+    private let statusHint = StatusHoverView(frame: .zero)
+    private var statusHintWork: DispatchWorkItem?
+    private var isStatusHovered = false
+    private let syncButton = StatusIndicatorButton(title: "", target: nil, action: nil)
     let outlineModel = HeadingOutlineModel()
     private var outlineRefresh: DispatchWorkItem?
     private var geometryRefresh: DispatchWorkItem?
@@ -160,7 +163,7 @@ final class NoteEditorView: NSView {
         syncButton.isBordered = false
         syncButton.font = .systemFont(ofSize: 11, weight: .medium)
         syncButton.appearance = NSAppearance(named: .darkAqua)
-        syncButton.toolTip = "Connect Flomo — click to set up sync"
+        syncButton.onHover = { [weak self] hovered in self?.setStatusHovered(hovered) }
         syncButton.setAccessibilityLabel("Connect Flomo")
         syncButton.wantsLayer = true
         syncButton.target = self
@@ -185,7 +188,15 @@ final class NoteEditorView: NSView {
             return event
         }
 
+        statusHint.translatesAutoresizingMaskIntoConstraints = false
+        statusHint.isHidden = true
+        statusHint.alphaValue = 0
+        addSubview(statusHint, positioned: .above, relativeTo: nil)
+        statusHint.layer?.zPosition = 100
+
         NSLayoutConstraint.activate([
+            statusHint.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
+            statusHint.topAnchor.constraint(equalTo: syncButton.bottomAnchor, constant: 3),
             hostingView.leadingAnchor.constraint(equalTo: leadingAnchor),
             hostingView.trailingAnchor.constraint(equalTo: trailingAnchor),
             hostingView.topAnchor.constraint(equalTo: topAnchor, constant: 40),
@@ -227,7 +238,7 @@ final class NoteEditorView: NSView {
         let localDetail = localSaveError.map { "Local save failed: " + $0 }
             ?? (showingSavePulse ? "Saved locally just now." : "Local save and Flomo sync")
         let details = localDetail + "\n" + phase.title + "\n" + syncDetail
-        syncButton.toolTip = details + "\nClick for details and actions."
+        statusHint.label.stringValue = localSaveError == nil ? phase.hoverSummary : "Not saved · Click for details"
         syncButton.setAccessibilityLabel(localSaveError == nil ? phase.title : "Local save failed")
         syncButton.setAccessibilityHelp(details)
 
@@ -260,6 +271,39 @@ final class NoteEditorView: NSView {
                 statusDot.add(pulse, forKey: "sync-busy")
             }
         }
+    }
+
+    private func setStatusHovered(_ hovered: Bool) {
+        isStatusHovered = hovered
+        statusHintWork?.cancel()
+        if hovered {
+            guard !isHiddenOrHasHiddenAncestor else { return }
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.isStatusHovered else { return }
+                self.statusHint.isHidden = false
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.16
+                    self.statusHint.animator().alphaValue = 1
+                }
+            }
+            statusHintWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+        } else {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.12
+                statusHint.animator().alphaValue = 0
+            } completionHandler: { [weak self] in
+                guard let self, !self.isStatusHovered else { return }
+                self.statusHint.isHidden = true
+            }
+        }
+    }
+
+    private func hideStatusHint() {
+        statusHintWork?.cancel()
+        isStatusHovered = false
+        statusHint.isHidden = true
+        statusHint.alphaValue = 0
     }
 
     func replaceFromSync(_ text: String) {
@@ -411,6 +455,7 @@ final class NoteEditorView: NSView {
     }
 
     deinit {
+        statusHintWork?.cancel()
         outlineRefresh?.cancel()
         geometryRefresh?.cancel()
         navigationTimer?.invalidate()
@@ -428,6 +473,7 @@ final class NoteEditorView: NSView {
     }
 
     func blur() {
+        hideStatusHint()
         stopNavigation()
         outlineModel.hoveredID = nil
         if window?.firstResponder === hostedTextView(in: hostingView) {
@@ -506,6 +552,7 @@ final class NoteEditorView: NSView {
     @objc private func collapseFromMenu() { onRequestCollapse?() }
     @objc private func quitFromMenu() { onRequestQuit?() }
     @objc private func openSyncSettings() {
+        hideStatusHint()
         if let localSaveError {
             let alert = NSAlert()
             alert.messageText = "Local save failed"

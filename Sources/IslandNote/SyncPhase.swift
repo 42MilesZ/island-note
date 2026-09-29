@@ -28,6 +28,29 @@ enum SyncPhase: Equatable {
         }
     }
 
+    var hoverSummary: String {
+        switch self {
+        case .synced: return "Saved · Synced"
+        case .checking: return "Saved · Checking sync"
+        case .syncing: return "Saved · Syncing…"
+        case .waiting: return "Saved · Sync pending"
+        case .paused: return "Saved · Sync paused"
+        case .disconnected: return "Local only · Connect Flomo"
+        case .mergeRequired: return "Merge needed · Click to review"
+        case .conflict: return "Conflicting edits · Click to review"
+        case .formattingChanged: return "Formatting changed · Click to review"
+        case .connectionFailed: return "Connection failed · Click to retry"
+        case .authorizationRequired: return "Reconnect Flomo"
+        case .rateLimited: return "Sync delayed · Retrying later"
+        case .unsupported: return "Unsupported format · View details"
+        case .tooLong: return "Note too long · View details"
+        case .verifyWrite: return "Verify sync · Click to review"
+        case .recoverCreate: return "Link existing memo"
+        case .localChanged: return "Local changes pending"
+        case .failed: return "Sync stopped · View details"
+        }
+    }
+
     var isBusy: Bool { self == .checking || self == .syncing }
     var needsAction: Bool {
         switch self {
