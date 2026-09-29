@@ -37,7 +37,7 @@ private final class FakeFlomo: FlomoServing {
 @MainActor
 final class FlomoSyncTests: XCTestCase {
     private var folders: [URL] = []
-    private func make(_ record: SyncRecord = SyncRecord(enabled: true, memoID: "test", baseline: "Base")) throws -> (FlomoSync, URL) {
+    private func make(_ record: SyncRecord = SyncRecord(enabled: true, memoID: "test", baseline: "Base", remoteBaseline: "Base")) throws -> (FlomoSync, URL) {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("island-sync-test-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         folders.append(folder)
@@ -212,10 +212,12 @@ final class FlomoSyncTests: XCTestCase {
         sync.start(client: client)
         await sync.synchronize()
         let conflict = try XCTUnwrap(sync.conflict)
+        XCTAssertEqual(sync.phase, .conflict)
         await sync.synchronize(choice: .merge, reviewed: conflict)
         XCTAssertEqual(local, "Island text\n\nFlomo text")
         XCTAssertEqual(client.memo.content, "Flomo text")
         XCTAssertEqual(sync.record.memoID, "test")
+        XCTAssertEqual(sync.phase, .waiting)
         await sync.synchronize()
         XCTAssertEqual(client.memo.content, local)
         XCTAssertEqual(client.creates, 0)
@@ -237,6 +239,93 @@ final class FlomoSyncTests: XCTestCase {
         await sync.synchronize(choice: .merge, reviewed: try XCTUnwrap(sync.conflict))
         XCTAssertEqual(client.updates, 0)
         XCTAssertNotNil(sync.conflict)
+        sync.pause()
+    }
+
+    func testUnverifiedMergedUploadCannotBeMergedAgain() async throws {
+        let (sync, _) = try make(SyncRecord(enabled: true, memoID: "test", baseline: "Base", pendingWrite: "Merged"))
+        let client = FakeFlomo()
+        client.memo = FlomoMemo(id: "test", content: "Changed formatting", updatedAt: "v2")
+        sync.readLocal = { "Merged" }
+        sync.applyRemote = { _, _ in XCTFail("Repeated merge would duplicate content") }
+        sync.start(client: client)
+        await sync.synchronize()
+        await sync.synchronize(choice: .merge, reviewed: try XCTUnwrap(sync.conflict))
+        XCTAssertEqual(sync.phase, .verifyWrite)
+        XCTAssertEqual(client.updates, 0)
+        sync.pause()
+    }
+
+    func testRemoteParagraphEditUsesItsOwnVerifiedBaseline() {
+        let localBase = "Line one\nLine two"
+        let remoteBase = "Line one\n\nLine two"
+        XCTAssertEqual(SyncComparison.direction(baseline: localBase, remoteBaseline: remoteBase,
+                                                local: localBase, remote: remoteBase), .none)
+        XCTAssertEqual(SyncComparison.direction(baseline: localBase, remoteBaseline: remoteBase,
+                                                local: "Edited locally", remote: remoteBase), .push)
+        XCTAssertEqual(SyncComparison.direction(baseline: localBase, remoteBaseline: remoteBase,
+                                                local: "Edited locally", remote: "Line one\nLine two"), .conflict)
+        XCTAssertEqual(SyncComparison.direction(baseline: "Line one\nLine two", remoteBaseline: "Line one\nLine two",
+                                                local: "Line one\nLine two", remote: "Line one\n\nLine two"), .pull)
+        XCTAssertEqual(SyncComparison.direction(baseline: nil, local: localBase, remote: remoteBase), .conflict)
+    }
+
+    func testInterruptedMergeRecoversWithoutAppendingAgain() async throws {
+        let merged = "Local\n\nRemote"
+        let intent = PendingMerge(localBefore: "Local", merged: merged, remoteBefore: "Remote")
+        let (sync, _) = try make(SyncRecord(enabled: true, memoID: "test", pendingMerge: intent))
+        let client = FakeFlomo()
+        client.memo = FlomoMemo(id: "test", content: "Remote", updatedAt: "v2")
+        sync.readLocal = { merged }
+        sync.applyRemote = { _, _ in XCTFail("The merged local file is already saved") }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(client.memo.content, merged)
+        XCTAssertNil(sync.record.pendingMerge)
+        XCTAssertEqual(client.creates, 0)
+        sync.pause()
+    }
+
+    func testInitialLinkClearlyRequestsMergeWithoutClaimingSuccess() async throws {
+        let (sync, _) = try make(SyncRecord(enabled: true, memoID: "test"))
+        let client = FakeFlomo()
+        sync.readLocal = { "Local" }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(sync.phase, .mergeRequired)
+        XCTAssertNil(sync.record.lastVerifiedAt)
+        XCTAssertEqual(client.updates, 0)
+        sync.pause()
+        XCTAssertEqual(sync.phase, .paused)
+    }
+
+    func testNetworkFailureHasAnActionableState() async throws {
+        let (sync, _) = try make()
+        let client = FakeFlomo()
+        client.fetchError = FlomoClientError.unavailable
+        sync.readLocal = { "Base" }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(sync.phase, .connectionFailed)
+        XCTAssertNil(sync.record.lastVerifiedAt)
+        client.fetchError = nil
+        await sync.synchronize()
+        XCTAssertEqual(sync.phase, .synced)
+        XCTAssertNotNil(sync.record.lastVerifiedAt)
+        sync.pause()
+    }
+
+    func testEditsDuringUploadRemainWaitingInsteadOfFalseSynced() async throws {
+        let (sync, _) = try make()
+        let client = FakeFlomo()
+        var local = "First edit"
+        sync.readLocal = { local }
+        client.onUpdate = { local = "Second edit" }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(sync.phase, .waiting)
+        XCTAssertEqual(sync.record.baseline, "First edit")
+        XCTAssertNil(sync.record.lastVerifiedAt)
         sync.pause()
     }
 

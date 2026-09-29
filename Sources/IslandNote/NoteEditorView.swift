@@ -90,7 +90,8 @@ final class NoteEditorView: NSView {
     private var scrollObservation: NSObjectProtocol?
     private let savedDot = NSView()
     private var savedPulse: DispatchWorkItem?
-    private let syncButton = NSButton(title: "Connect Flomo…", target: nil, action: nil)
+    private var displayedSyncPhase = SyncPhase.disconnected
+    private let syncButton = NSButton(title: "", target: nil, action: nil)
     let outlineModel = HeadingOutlineModel()
     private var outlineRefresh: DispatchWorkItem?
     private var geometryRefresh: DispatchWorkItem?
@@ -160,7 +161,13 @@ final class NoteEditorView: NSView {
 
         syncButton.translatesAutoresizingMaskIntoConstraints = false
         syncButton.isBordered = false
-        syncButton.font = .systemFont(ofSize: 10)
+        syncButton.font = .systemFont(ofSize: 11, weight: .medium)
+        syncButton.appearance = NSAppearance(named: .darkAqua)
+        syncButton.imagePosition = .imageOnly
+        syncButton.toolTip = "Connect Flomo — click to set up sync"
+        syncButton.setAccessibilityLabel("Connect Flomo")
+        syncButton.image = NSImage(systemSymbolName: SyncPhase.disconnected.symbol, accessibilityDescription: nil)
+        syncButton.wantsLayer = true
         syncButton.contentTintColor = .secondaryLabelColor
         syncButton.target = self
         syncButton.action = #selector(openSyncSettings)
@@ -201,7 +208,9 @@ final class NoteEditorView: NSView {
             savedDot.widthAnchor.constraint(equalToConstant: 6),
             savedDot.heightAnchor.constraint(equalToConstant: 6),
             syncButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 36),
-            syncButton.topAnchor.constraint(equalTo: topAnchor, constant: 10),
+            syncButton.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            syncButton.widthAnchor.constraint(equalToConstant: 24),
+            syncButton.heightAnchor.constraint(equalToConstant: 24),
             syncButton.trailingAnchor.constraint(lessThanOrEqualTo: savedDot.leadingAnchor, constant: -12),
         ])
     }
@@ -214,10 +223,32 @@ final class NoteEditorView: NSView {
         }
     }
 
-    func showSyncStatus(_ status: String, error: Bool) {
-        syncButton.title = error ? "Flomo · Needs attention" : status.hasPrefix("Synced") ? "Flomo · Synced" : status
-        syncButton.toolTip = status
-        syncButton.contentTintColor = error ? .systemOrange : .secondaryLabelColor
+    func showSyncStatus(_ phase: SyncPhase, detail: String) {
+        let changed = displayedSyncPhase != phase
+        displayedSyncPhase = phase
+        syncButton.title = ""
+        syncButton.image = NSImage(systemSymbolName: phase.symbol, accessibilityDescription: nil)
+        syncButton.toolTip = phase.title + "\n" + detail + "\nClick for details and actions."
+        syncButton.setAccessibilityLabel(phase.title)
+        syncButton.setAccessibilityHelp(detail)
+        syncButton.contentTintColor = phase.needsAction ? NSColor(red: 0.94, green: 0.70, blue: 0.38, alpha: 1)
+            : NSColor(white: phase == .synced ? 0.48 : 0.66, alpha: 1)
+        syncButton.layer?.removeAnimation(forKey: "sync-busy")
+        if phase.isBusy, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            let pulse = CABasicAnimation(keyPath: "opacity")
+            pulse.fromValue = 0.5
+            pulse.toValue = 1
+            pulse.duration = 0.8
+            pulse.autoreverses = true
+            pulse.repeatCount = .infinity
+            syncButton.layer?.add(pulse, forKey: "sync-busy")
+        }
+        if changed, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            let fade = CATransition()
+            fade.type = .fade
+            fade.duration = 0.18
+            syncButton.layer?.add(fade, forKey: "sync-state")
+        }
     }
 
     func replaceFromSync(_ text: String) {

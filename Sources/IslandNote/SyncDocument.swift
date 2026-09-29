@@ -39,14 +39,82 @@ enum SyncDocument {
         // Flomo removes unsupported HTML heading elements on a manual save.
         // Escape only the leading marker so headings remain ordinary text there.
         normalized(text).components(separatedBy: "\n").map { line in
-            line.range(of: #"^#{1,6}\s+"#, options: .regularExpression) != nil ? "\\" + line : line
+            // A list item whose only content is a dash was dropped by Flomo.
+            // Send it as literal text instead of a list item.
+            if line == "- -" { return "\\- -" }
+            return line.range(of: #"^#{1,6}\s+"#, options: .regularExpression) != nil ? "\\" + line : line
         }.joined(separator: "\n")
     }
 
     static func fromFlomo(_ text: String) -> String {
         normalized(text.components(separatedBy: "\n").map { line in
-            line.range(of: ##"^\\#{1,6}\s+"##, options: .regularExpression) != nil ? String(line.dropFirst()) : line
+            if line == "\\- -" { return "- -" }
+            let heading = line.range(of: ##"^\\#{1,6}\s+"##, options: .regularExpression) != nil
+                ? String(line.dropFirst()) : line
+            return unwrapBareURLs(in: heading)
         }.joined(separator: "\n"))
+    }
+
+    /// Compare a local document with a decoded Flomo document without rewriting
+    /// either one. Flomo adds some paragraph separators and changes harmless
+    /// Markdown escapes; missing words, list items, or local paragraph breaks
+    /// still differ. `remote` should already have passed through `fromFlomo`.
+    static func equivalent(local: String, remote: String) -> Bool {
+        let left = comparisonLines(local)
+        let right = comparisonLines(remote)
+        var i = 0
+        var j = 0
+        while i < left.count && j < right.count {
+            if left[i] == right[j] { i += 1; j += 1; continue }
+            // An extra single blank line in Flomo is a known editor artifact
+            // after headings or between ordinary text lines. Never discard a
+            // blank line from the local source.
+            if right[j].isEmpty, j > 0, j + 1 < right.count,
+               !right[j - 1].isEmpty, !right[j + 1].isEmpty,
+               isHeading(right[j - 1]) ||
+               (listKind(right[j - 1]) == nil && listKind(right[j + 1]) == nil) {
+                j += 1
+                continue
+            }
+            return false
+        }
+        return i == left.count && j == right.count
+    }
+
+    private static func comparisonLines(_ text: String) -> [String] {
+        normalized(text).components(separatedBy: "\n").map { line in
+            var compared = line
+            let indentation = compared.prefix(while: { $0 == " " || $0 == "\t" })
+            let body = compared.dropFirst(indentation.count)
+            if listKind(String(body)) != nil {
+                compared = indentation.replacingOccurrences(of: "\t", with: "  ") + body
+            }
+            // Flomo removes escapes before a lone tilde in an iCloud path and
+            // adds escapes to hyphens immediately following bold spans.
+            compared = compared.replacingOccurrences(of: #"(?<=[\p{L}\p{N}_])\\~(?=[\p{L}\p{N}_])"#, with: "~", options: .regularExpression)
+            compared = compared.replacingOccurrences(of: #"(?<=[^\\\s])\\-"#, with: "-", options: .regularExpression)
+            return unwrapBareURLs(in: compared)
+        }
+    }
+
+    private static func isHeading(_ line: String) -> Bool {
+        line.range(of: #"^#{1,6}\s+"#, options: .regularExpression) != nil
+    }
+
+    private static func unwrapBareURLs(in line: String) -> String {
+        // Only [the exact URL](the exact URL) is Flomo's automatic conversion
+        // of a bare URL. Other Markdown links remain unsupported.
+        let pattern = #"\[(https?://[^\]\n]+)\]\((https?://[^)\n]+)\)"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return line }
+        let source = line as NSString
+        var result = line
+        for match in expression.matches(in: line, range: NSRange(location: 0, length: source.length)).reversed() {
+            let label = source.substring(with: match.range(at: 1))
+            let target = source.substring(with: match.range(at: 2))
+            guard label == target, let range = Range(match.range, in: result) else { continue }
+            result.replaceSubrange(range, with: target)
+        }
+        return result
     }
 
     static func merging(local: String, remote: String) -> String {
@@ -87,4 +155,3 @@ enum SyncDocument {
         return nextCount <= limit || nextCount < count(current)
     }
 }
-

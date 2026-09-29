@@ -129,6 +129,17 @@ final class HeadingNavigationTests: XCTestCase {
                 try snapshot(editor, name: name)
             }
         }
+        if ProcessInfo.processInfo.environment["ISLAND_NOTE_RENDER_DIR"] != nil {
+            window.setContentSize(NSSize(width: 460, height: 275))
+            editor.layoutSubtreeIfNeeded()
+            for (name, phase) in [("sync-merge", SyncPhase.mergeRequired), ("sync-checking", .checking),
+                                  ("sync-synced", .synced), ("sync-offline", .connectionFailed),
+                                  ("sync-formatting", .formattingChanged)] {
+                editor.showSyncStatus(phase, detail: "Status details and next action")
+                settle(0.2)
+                try snapshot(editor, name: name)
+            }
+        }
         let rail = try XCTUnwrap(find(HeadingOutlineHost.self, in: editor))
         XCTAssertNil(rail.hitTest(NSPoint(x: rail.frame.minX + 50, y: rail.frame.midY)), "Preview must not steal text clicks")
         editor.navigate(to: try XCTUnwrap(editor.outlineModel.headings.last))

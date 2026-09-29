@@ -90,13 +90,13 @@ enum FlomoSettings {
 
     private static func review(_ conflict: SyncConflict, sync: FlomoSync) {
         let alert = NSAlert()
-        alert.messageText = "Choose the version to keep"
-        alert.informativeText = "Merge Both keeps the Island Note text followed by the Flomo text in one document and the same memo. Both originals are backed up locally. If either copy changes during review, Island Note will ask you to review again."
+        alert.messageText = sync.phase == .mergeRequired ? "Merge your two notes" : "Review sync differences"
+        alert.informativeText = sync.status + "\n\nMerge Both keeps the Island Note text followed by the Flomo text in one document and the same memo. Both originals are backed up locally. If either copy changes during review, Island Note will ask you to review again."
         alert.addButton(withTitle: "Use Island Note")
         alert.addButton(withTitle: "Cancel")
         alert.addButton(withTitle: "Use Flomo")
         alert.addButton(withTitle: "Pause Sync")
-        alert.addButton(withTitle: "Merge Both")
+        alert.addButton(withTitle: "Merge Both").isEnabled = sync.record.pendingWrite == nil
         let stack = NSStackView()
         stack.orientation = .horizontal
         stack.spacing = 12

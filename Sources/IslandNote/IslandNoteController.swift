@@ -523,7 +523,7 @@ final class IslandNoteController: NSObject {
                                                         appropriateFor: nil, create: true).appendingPathComponent("IslandNote")
             let sync = try FlomoSync(stateURL: directory.appendingPathComponent("flomo-sync.json"))
             self.sync = sync
-            sync.onStatus = { [weak self] status, error in self?.editor.showSyncStatus(status, error: error) }
+            sync.onStatus = { [weak self] phase, detail in self?.editor.showSyncStatus(phase, detail: detail) }
             sync.readLocal = { [weak self] in
                 guard let self else { throw SyncFailure.localUnavailable }
                 guard !self.editor.hasMarkedText else { throw SyncFailure.localChanged }
@@ -543,7 +543,7 @@ final class IslandNoteController: NSObject {
             store.onSyncNeeded = { [weak sync] in sync?.localChanged() }
             if let token = try FlomoCredential.load() { sync.start(client: FlomoClient(token: token)) }
         } catch {
-            editor.showSyncStatus("Flomo setup unavailable: \(error.localizedDescription)", error: true)
+            editor.showSyncStatus(.failed, detail: "Flomo setup unavailable: \(error.localizedDescription)")
         }
     }
 
