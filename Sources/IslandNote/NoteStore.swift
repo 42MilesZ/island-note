@@ -21,6 +21,8 @@ final class NoteStore {
     private var lastLoadedContent: String?
     private var pending: String?
     private var saveWork: DispatchWorkItem?
+    private let configurationError: Error?
+    private let usesManagedFile: Bool
     private let debounceInterval: TimeInterval = 0.18
     private(set) var lastErrorMessage: String?
 
@@ -28,14 +30,44 @@ final class NoteStore {
     var onSyncNeeded: (() -> Void)?
     var onSaveError: ((String) -> Void)?
 
-    init(fileURL: URL? = nil) {
-        self.fileURL = fileURL ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Mobile Documents/iCloud~md~obsidian/Documents/Miles-Vault/Dairy notes/Island Note.md")
+    init(fileURL: URL? = nil, configurationDirectory: URL? = nil) {
+        if let fileURL {
+            self.fileURL = fileURL
+            configurationError = nil
+            usesManagedFile = false
+            return
+        }
+        let directory = configurationDirectory ?? FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/IslandNote")
+        let settings = directory.appendingPathComponent("settings.json")
+        let managed = directory.appendingPathComponent("Island Note.md")
+        do {
+            if FileManager.default.fileExists(atPath: settings.path) {
+                let config = try JSONDecoder().decode(NoteConfiguration.self, from: Data(contentsOf: settings))
+                guard config.notePath.hasPrefix("/") else { throw CocoaError(.fileReadInvalidFileName) }
+                self.fileURL = URL(fileURLWithPath: config.notePath)
+                usesManagedFile = false
+            } else {
+                self.fileURL = managed
+                usesManagedFile = true
+            }
+            configurationError = nil
+        } catch {
+            self.fileURL = managed
+            usesManagedFile = false
+            configurationError = error
+        }
     }
 
     var path: String { fileURL.path }
 
     func load() throws -> String {
+        if let configurationError { throw configurationError }
+        if usesManagedFile, !FileManager.default.fileExists(atPath: fileURL.path) {
+            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            do { try Data().write(to: fileURL, options: .withoutOverwriting) }
+            catch CocoaError.fileWriteFileExists { /* Another launch created it; read that copy. */ }
+        }
         let text = try String(contentsOf: fileURL, encoding: .utf8)
         lastLoadedContent = text
         return text
@@ -110,4 +142,8 @@ final class NoteStore {
         if let coordinationError { throw coordinationError }
         if let writeError { throw writeError }
     }
+}
+
+private struct NoteConfiguration: Decodable {
+    let notePath: String
 }

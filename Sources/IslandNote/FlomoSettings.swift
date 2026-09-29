@@ -42,8 +42,7 @@ enum FlomoSettings {
             case .alertFirstButtonReturn:
                 do {
                     let entered = token.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let saved = try FlomoCredential.load()
-                    guard let credential = entered.isEmpty ? saved : entered, !credential.isEmpty else {
+                    guard let credential = entered.isEmpty ? try FlomoCredential.load() : entered, !credential.isEmpty else {
                         error("Enter a Flomo personal token first."); return
                     }
                     let id = try memoID(from: memo.stringValue)

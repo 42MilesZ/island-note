@@ -1,26 +1,23 @@
-APP_NAME := IslandNote
-BUILD_DIR := .build
-RELEASE_DIR := $(BUILD_DIR)/release
-APP := $(APP_NAME).app
-CONTENTS := $(APP)/Contents
-
-.PHONY: all build package run clean
+.PHONY: all build package package-dev run notarize audit
 
 all: package
 
 build:
-	swift build -c release
+	swift build -c release --product IslandNote
 
-package: build
-	rm -rf $(APP)
-	mkdir -p $(CONTENTS)/MacOS $(CONTENTS)/Resources
-	cp $(RELEASE_DIR)/$(APP_NAME) $(CONTENTS)/MacOS/$(APP_NAME)
-	cp Resources/Info.plist $(CONTENTS)/Info.plist
-	codesign --force --deep --sign - $(APP) 2>/dev/null || true
-	@echo "Built $(APP)"
+# Stable Developer ID signing is the default; signing failures stop packaging.
+package:
+	./scripts/package.sh
+
+# Disposable development builds only: do not use with a saved Flomo token.
+package-dev:
+	SIGN_IDENTITY=- ./scripts/package.sh
 
 run: package
-	open $(APP)
+	open IslandNote.app
 
-clean:
-	rm -rf $(BUILD_DIR) $(APP)
+notarize: package
+	./scripts/notarize.sh
+
+audit:
+	gitleaks git --log-opts=--all --redact=100

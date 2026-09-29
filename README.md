@@ -14,7 +14,7 @@ Requires macOS 14 or later and Swift 5.9 or later.
 make run
 ```
 
-`make package` builds `IslandNote.app` without opening it.
+`make package` builds a fresh signed `IslandNote.app` without opening it, with an application icon and version metadata. Previous bundles are kept recoverable under the ignored `.build/` directory.
 
 ## Flomo sync
 
@@ -32,10 +32,37 @@ Sync state and replacement backups are local to `~/Library/Application Support/I
 
 ## Storage
 
-Island Note edits one document directly in the local Obsidian vault:
+New installations use `~/Library/Application Support/IslandNote/Island Note.md`.
+To use an existing Markdown file, set its absolute path in the local-only file
+`~/Library/Application Support/IslandNote/settings.json`:
 
-`~/Library/Mobile Documents/iCloud~md~obsidian/Documents/Miles-Vault/Dairy notes/Island Note.md`
+```json
+{"notePath": "/path/to/your/note.md"}
+```
 
-Changes save automatically while typing and when the panel closes. The Vault folder must already exist. The original `notes/scratch.txt` is kept locally as a backup and remains ignored by Git.
+An invalid configuration or a missing selected file blocks saving instead of
+silently creating or switching to another document. Changes save automatically
+while typing and when the panel closes. Local notes and sync backups are never
+part of the source repository.
+
+## Signing and distribution
+
+`make package` uses the single installed **Developer ID Application** identity,
+or an explicit `SIGN_IDENTITY`, with hardened runtime and a secure timestamp.
+It stops on signing errors; it never silently falls back to ad-hoc signing.
+Keep the bundle identifier and Developer ID team stable across updates so macOS
+Keychain can recognize the same app. Switching from an old ad-hoc build may need
+one final Keychain approval. Normal updates then retain the same designated
+requirement; a locked Keychain can still require unlocking.
+
+`NOTARY_PROFILE=your-keychain-profile make notarize` submits the signed bundle
+to Apple, waits for acceptance, staples the ticket, verifies Gatekeeper, and
+writes `dist/IslandNote.zip`. Notarization credentials stay in Keychain. Run
+`make package-dev` only for disposable ad-hoc development builds.
+
+Before sharing code, run `make audit`. The repository ignores private notes,
+sync state, local environment files, signing keys, certificates, and release
+artifacts. Review staged changes too: an ignore rule cannot protect an already
+tracked file or remove older Git history.
 
 Built with Swift, AppKit, and [SwiftMarkdownEngine](https://github.com/nodes-app/swift-markdown-engine).

@@ -3,4 +3,20 @@ IslandNote.app/
 .DS_Store
 *.xcodeproj
 .swiftpm/
-notes/scratch.txt
+notes/
+dist/
+.local/
+.env
+.env.*
+!.env.example
+*.p8
+*.p12
+*.pem
+*.key
+*.cer
+*.keychain*
+*.mobileprovision
+*.provisionprofile
+*.dmg
+flomo-sync.json
+Sync Backups/
