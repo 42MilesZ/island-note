@@ -1,9 +1,9 @@
 import AppKit
 
 enum SyncDocument {
-    static let limit = 30_000
+    static let limit = DocumentLimits.limit
 
-    static func count(_ text: String) -> Int { text.unicodeScalars.count }
+    static func count(_ text: String) -> Int { DocumentLimits.count(text) }
 
     static func normalized(_ text: String) -> String {
         let lines = text.replacingOccurrences(of: "\r\n", with: "\n")

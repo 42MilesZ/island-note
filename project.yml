@@ -1,0 +1,84 @@
+name: IslandNote
+options:
+  minimumXcodeGenVersion: 2.44.0
+  deploymentTarget:
+    macOS: '14.0'
+packages:
+  MarkdownEngine:
+    url: https://github.com/nodes-app/swift-markdown-engine.git
+    exactVersion: 0.13.0
+settings:
+  base:
+    SWIFT_VERSION: '5.9'
+    DEVELOPMENT_TEAM: NMJUUHTN83
+    CODE_SIGN_STYLE: Automatic
+    MACOSX_DEPLOYMENT_TARGET: '14.0'
+    MARKETING_VERSION: 0.2.0
+    CURRENT_PROJECT_VERSION: 3
+    ENABLE_HARDENED_RUNTIME: YES
+    ENABLE_APP_SANDBOX: YES
+    SWIFT_ACTIVE_COMPILATION_CONDITIONS: '$(inherited) ISLAND_TESTFLIGHT'
+    DEBUG_INFORMATION_FORMAT: dwarf-with-dsym
+    ARCHS: 'arm64 x86_64'
+    ONLY_ACTIVE_ARCH: NO
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+  configs:
+    Debug:
+      ONLY_ACTIVE_ARCH: YES
+targets:
+  IslandNote:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/IslandNote
+        excludes:
+          - FlomoClient.swift
+          - FlomoCredential.swift
+          - FlomoMemoPicker.swift
+          - FlomoSettings.swift
+          - FlomoSync.swift
+          - SyncDocument.swift
+          - SyncPhase.swift
+      - path: Resources/AppIcon.icns
+      - path: Resources/ThirdPartyNotices.txt
+      - path: Resources/PrivacyInfo.xcprivacy
+    dependencies:
+      - package: MarkdownEngine
+        product: MarkdownEngine
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.projects.island-note
+        INFOPLIST_FILE: Resources/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Resources/TestFlight.entitlements
+        PRODUCT_NAME: IslandNote
+        COMBINE_HIDPI_IMAGES: YES
+  IslandNoteTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests/IslandNoteTests
+        excludes:
+          - FlomoClientTests.swift
+          - FlomoSyncTests.swift
+          - SyncDocumentRoundTripTests.swift
+    dependencies:
+      - target: IslandNote
+      - package: MarkdownEngine
+        product: MarkdownEngine
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.projects.island-note.tests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_ENTITLEMENTS: Resources/TestFlight.entitlements
+schemes:
+  IslandNote:
+    build:
+      targets:
+        IslandNote: all
+        IslandNoteTests: [test]
+    test:
+      config: Debug
+      targets:
+        - IslandNoteTests
+    archive:
+      config: Release

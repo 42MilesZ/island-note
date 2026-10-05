@@ -66,3 +66,26 @@ artifacts. Review staged changes too: an ignore rule cannot protect an already
 tracked file or remove older Git history.
 
 Built with Swift, AppKit, and [SwiftMarkdownEngine](https://github.com/nodes-app/swift-markdown-engine).
+
+## TestFlight (macOS)
+
+`make testflight` generates the Xcode project from `project.yml`, archives a
+universal Apple Silicon / Intel app, exports using App Store Connect signing,
+validates the package, then uploads it. XcodeGen and Xcode 26 are required.
+`ASC_KEY_ID` and `ASC_ISSUER_ID` come from the shell environment; the private key
+stays in `~/.appstoreconnect/private_keys/`. The first beta uses build `3`. Set `BUILD_NUMBER` to a new increasing integer
+for subsequent uploads. An App Store Connect app record
+for `local.projects.island-note` must exist before uploading.
+
+This target defines `ISLAND_TESTFLIGHT` and excludes all Flomo networking,
+credentials, settings and sync implementations at compile time. It has App
+Sandbox enabled with **no network or Keychain access entitlements**. Its note is
+stored under the sandbox container's Application Support directory. Existing
+unsandboxed notes and Flomo configuration are not imported. The direct
+distribution build from `make package` retains its existing Flomo support.
+
+The same uploaded build is intended for both internal and external testing
+(`testFlightInternalTestingOnly` is false). Upload acceptance, build processing,
+internal testing and external Beta App Review are separate states: check the
+exact uploaded build before reporting availability. Reviewers do not need a
+login or a Flomo token.

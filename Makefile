@@ -1,4 +1,4 @@
-.PHONY: all build package package-dev run notarize audit
+.PHONY: all build package package-dev run notarize audit testflight
 
 all: package
 
@@ -21,3 +21,6 @@ notarize: package
 
 audit:
 	gitleaks git --log-opts=--all --redact=100
+
+testflight:
+	./scripts/testflight.sh

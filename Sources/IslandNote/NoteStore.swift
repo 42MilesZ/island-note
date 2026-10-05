@@ -1,6 +1,6 @@
 import Foundation
 
-/// The one Markdown document edited by Island Note, inside the local Obsidian vault.
+/// The one local Markdown document edited by Island Note.
 /// Writes are debounced while typing and flushed before the editor closes.
 final class NoteStore {
     private enum SaveError: LocalizedError {
@@ -37,8 +37,8 @@ final class NoteStore {
             usesManagedFile = false
             return
         }
-        let directory = configurationDirectory ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/IslandNote")
+        let directory = configurationDirectory ?? Self.defaultDirectory
+
         let settings = directory.appendingPathComponent("settings.json")
         let managed = directory.appendingPathComponent("Island Note.md")
         do {
@@ -57,6 +57,17 @@ final class NoteStore {
             usesManagedFile = false
             configurationError = error
         }
+    }
+
+    static var defaultDirectory: URL {
+        #if ISLAND_TESTFLIGHT
+        // Foundation resolves this inside the App Sandbox container.
+        return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("IslandNote", isDirectory: true)
+        #else
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/IslandNote", isDirectory: true)
+        #endif
     }
 
     var path: String { fileURL.path }
@@ -120,6 +131,7 @@ final class NoteStore {
         }
     }
 
+    #if !ISLAND_TESTFLIGHT
     func applySyncedText(_ text: String, expected: String) throws {
         guard pending == nil, lastLoadedContent == expected else { throw SyncFailure.localChanged }
         try coordinatedWrite(text, expected: expected)
@@ -127,6 +139,8 @@ final class NoteStore {
         lastErrorMessage = nil
         onSaved?()
     }
+
+    #endif
 
     private func coordinatedWrite(_ text: String, expected: String) throws {
         var coordinationError: NSError?

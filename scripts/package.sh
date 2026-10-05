@@ -23,9 +23,8 @@ output="$PWD/IslandNote.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" .build/AppIcon.iconset
 cp "$bin_dir/IslandNote" "$app/Contents/MacOS/IslandNote"
 cp Resources/Info.plist "$app/Contents/Info.plist"
-if [[ -n "${BUILD_NUMBER:-}" ]]; then
-    /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$app/Contents/Info.plist"
-fi
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${APP_VERSION:-0.2.0}" "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER:-2}" "$app/Contents/Info.plist"
 swift scripts/make-icon.swift .build/AppIcon.iconset
 iconutil -c icns .build/AppIcon.iconset -o "$app/Contents/Resources/AppIcon.icns"
 if [[ "$identity" == "-" ]]; then

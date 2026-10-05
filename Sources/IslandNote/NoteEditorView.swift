@@ -51,8 +51,8 @@ private struct MarkdownEditorHost: View {
             text: Binding(
                 get: { model.text },
                 set: { newText in
-                    if SyncDocument.count(newText) > SyncDocument.limit,
-                       SyncDocument.count(newText) >= SyncDocument.count(model.text) {
+                    if DocumentLimits.count(newText) > DocumentLimits.limit,
+                       DocumentLimits.count(newText) >= DocumentLimits.count(model.text) {
                         // Also catches smart-input expansions and edits that bypass
                         // the normal text binding. Keep the engine’s native delegate
                         // intact for Chinese composition and list editing.
@@ -89,11 +89,13 @@ final class NoteEditorView: NSView {
     private weak var observedClipView: NSClipView?
     private var scrollObservation: NSObjectProtocol?
     private let statusDot = CALayer()
+    #if !ISLAND_TESTFLIGHT
     private var syncDetail = "Flomo is not connected. Click to set up sync."
+    private var displayedSyncPhase = SyncPhase.disconnected
+    #endif
     private var localSaveError: String?
     private var showingSavePulse = false
     private var savedPulse: DispatchWorkItem?
-    private var displayedSyncPhase = SyncPhase.disconnected
     private let statusHint = StatusHoverView(frame: .zero)
     private var statusHintWork: DispatchWorkItem?
     private var isStatusHovered = false
@@ -164,7 +166,7 @@ final class NoteEditorView: NSView {
         syncButton.font = .systemFont(ofSize: 11, weight: .medium)
         syncButton.appearance = NSAppearance(named: .darkAqua)
         syncButton.onHover = { [weak self] hovered in self?.setStatusHovered(hovered) }
-        syncButton.setAccessibilityLabel("Connect Flomo")
+        syncButton.setAccessibilityLabel("Local save status")
         syncButton.wantsLayer = true
         syncButton.target = self
         syncButton.action = #selector(openSyncSettings)
@@ -227,28 +229,42 @@ final class NoteEditorView: NSView {
         }
     }
 
+    #if !ISLAND_TESTFLIGHT
     func showSyncStatus(_ phase: SyncPhase, detail: String) {
         displayedSyncPhase = phase
         syncDetail = detail
         refreshStatusIndicator()
     }
 
+    #endif
+
     private func refreshStatusIndicator() {
+        #if ISLAND_TESTFLIGHT
+        let details = localSaveError.map { "Local save failed: " + $0 }
+            ?? (showingSavePulse ? "Saved locally just now." : "Your note is saved on this Mac. No cloud sync is enabled.")
+        statusHint.label.stringValue = localSaveError == nil ? "Saved locally" : "Not saved · Click for details"
+        syncButton.setAccessibilityLabel(localSaveError == nil ? "Local save status" : "Local save failed")
+        let needsAction = false
+        let isBusy = false
+        #else
         let phase = displayedSyncPhase
         let localDetail = localSaveError.map { "Local save failed: " + $0 }
             ?? (showingSavePulse ? "Saved locally just now." : "Local save and Flomo sync")
         let details = localDetail + "\n" + phase.title + "\n" + syncDetail
         statusHint.label.stringValue = localSaveError == nil ? phase.hoverSummary : "Not saved · Click for details"
         syncButton.setAccessibilityLabel(localSaveError == nil ? phase.title : "Local save failed")
+        let needsAction = phase.needsAction
+        let isBusy = phase.isBusy
+        #endif
         syncButton.setAccessibilityHelp(details)
 
         // A local write failure must remain visible even if Flomo reports success.
         // A successful local save must not hide a sync conflict or connection error.
         let color: NSColor
         if localSaveError != nil { color = .systemRed }
-        else if phase.needsAction { color = NSColor(red: 0.94, green: 0.70, blue: 0.38, alpha: 1) }
+        else if needsAction { color = NSColor(red: 0.94, green: 0.70, blue: 0.38, alpha: 1) }
         else if showingSavePulse { color = NSColor(red: 0.55, green: 0.80, blue: 0.67, alpha: 1) }
-        else { color = NSColor(white: phase.isBusy ? 0.68 : 0.40, alpha: 1) }
+        else { color = NSColor(white: isBusy ? 0.68 : 0.40, alpha: 1) }
         let previousColor = statusDot.presentation()?.backgroundColor ?? statusDot.backgroundColor
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -261,7 +277,7 @@ final class NoteEditorView: NSView {
             fade.toValue = color.cgColor
             fade.duration = 0.18
             statusDot.add(fade, forKey: "status-color")
-            if phase.isBusy, !showingSavePulse, localSaveError == nil {
+            if isBusy, !showingSavePulse, localSaveError == nil {
                 let pulse = CABasicAnimation(keyPath: "opacity")
                 pulse.fromValue = 0.4
                 pulse.toValue = 1
@@ -528,10 +544,12 @@ final class NoteEditorView: NSView {
     }
 
     private func appendAppMenuItems(to menu: NSMenu) {
+        #if !ISLAND_TESTFLIGHT
         let sync = NSMenuItem(title: "Flomo Sync…", action: #selector(openSyncSettings), keyEquivalent: "")
         sync.target = self
         menu.addItem(sync)
         menu.addItem(.separator())
+        #endif
         let bold = NSMenuItem(title: "Bold", action: #selector(applyBold), keyEquivalent: "b")
         bold.target = self
         menu.addItem(bold)
@@ -558,6 +576,15 @@ final class NoteEditorView: NSView {
             alert.messageText = "Local save failed"
             alert.informativeText = localSaveError
             alert.runModal()
-        } else { onRequestSync?() }
+        } else {
+            #if ISLAND_TESTFLIGHT
+            let alert = NSAlert()
+            alert.messageText = "Saved on this Mac"
+            alert.informativeText = "Island Note saves automatically. This beta does not include cloud sync."
+            alert.runModal()
+            #else
+            onRequestSync?()
+            #endif
+        }
     }
 }

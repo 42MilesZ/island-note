@@ -68,7 +68,9 @@ final class IslandPanel: NSPanel {
 @MainActor
 final class IslandNoteController: NSObject {
     private let store: NoteStore
+    #if !ISLAND_TESTFLIGHT
     private var sync: FlomoSync?
+    #endif
     private var showingSyncSettings = false
 
     // 窗口与岛体
@@ -114,7 +116,9 @@ final class IslandNoteController: NSObject {
         installMainMenu()
         setup()
         bindStore()
+        #if !ISLAND_TESTFLIGHT
         setupSync()
+        #endif
     }
 
     /// 主菜单 Edit：让 ⌘C/V/X/A/Z 走标准 responder，少一层拦截。
@@ -136,9 +140,11 @@ final class IslandNoteController: NSObject {
 
         let appItem = NSMenuItem()
         let appMenu = NSMenu(title: "Island Note")
+        #if !ISLAND_TESTFLIGHT
         let syncItem = NSMenuItem(title: "Flomo Sync…", action: #selector(showSyncSettings), keyEquivalent: ",")
         syncItem.target = self
         appMenu.addItem(syncItem)
+        #endif
         let quit = NSMenuItem(title: "Quit Island Note", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appMenu.addItem(quit)
         appItem.submenu = appMenu
@@ -230,7 +236,9 @@ final class IslandNoteController: NSObject {
             backing: .buffered,
             defer: false
         )
+        #if !ISLAND_TESTFLIGHT
         panel.onSyncSettings = { [weak self] in self?.showSyncSettings() }
+        #endif
         panel.level = .screenSaver
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -266,7 +274,9 @@ final class IslandNoteController: NSObject {
         editor.onRequestQuit = {
             NSApp.terminate(nil)
         }
+        #if !ISLAND_TESTFLIGHT
         editor.onRequestSync = { [weak self] in self?.showSyncSettings() }
+        #endif
         // 编辑器只覆盖可见形状（expandedRect）：底边 = 遮罩底边，
         // 原先铺满全窗口时底部 16px gutter 成了「滚得到但永远看不见」的死区。
         editor.frame = expandedRect
@@ -449,9 +459,11 @@ final class IslandNoteController: NSObject {
         guard inIsland else { return }
 
         let menu = NSMenu()
+        #if !ISLAND_TESTFLIGHT
         let syncItem = NSMenuItem(title: "Flomo Sync…", action: #selector(showSyncSettings), keyEquivalent: "")
         syncItem.target = self
         menu.addItem(syncItem)
+        #endif
         if mode == .expanded {
             let collapseItem = NSMenuItem(title: "Collapse", action: #selector(collapseAction), keyEquivalent: "")
             collapseItem.target = self
@@ -483,7 +495,9 @@ final class IslandNoteController: NSObject {
             editor.showSaveError("Could not read \(store.path): \(error.localizedDescription)")
         }
         goTo(.expanded)
+        #if !ISLAND_TESTFLIGHT
         sync?.request()
+        #endif
         Haptics.expand()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKey()
@@ -517,6 +531,7 @@ final class IslandNoteController: NSObject {
         editor.flushPending()
     }
 
+    #if !ISLAND_TESTFLIGHT
     private func setupSync() {
         do {
             let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
@@ -557,6 +572,8 @@ final class IslandNoteController: NSObject {
         guard store.flushSync() else { return }
         FlomoSettings.show(sync)
     }
+
+    #endif
 
     /// 只动画遮罩形状（顶边恒定）。expanded 用弹簧回弹。
     private func goTo(_ m: Mode) {
