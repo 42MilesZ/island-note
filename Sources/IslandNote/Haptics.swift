@@ -2,6 +2,18 @@ import AppKit
 
 /// Trackpad Taptic — 清脆单击。展开一次、收起一次，不叠拍。
 enum Haptics {
+    static func dockBoundary() {
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+    }
+
+    static func detach() {
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+    }
+
+    static func dock() {
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+    }
+
     static func outlinePreview() {
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
     }

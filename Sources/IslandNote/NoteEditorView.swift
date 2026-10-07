@@ -83,6 +83,7 @@ private struct MarkdownEditorHost: View {
 
 /// Live-rendered Markdown editor inside the existing island panel.
 final class NoteEditorView: NSView {
+    let dragHandle = PanelDragView(frame: .zero)
     private let model = NoteEditorModel()
     private var hostingView: NSHostingView<MarkdownEditorHost>!
     private weak var featherView: EdgeFeatherView?
@@ -161,6 +162,9 @@ final class NoteEditorView: NSView {
         hostingView.appearance = NSAppearance(named: .darkAqua)
         addSubview(hostingView)
 
+        dragHandle.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(dragHandle)
+
         syncButton.translatesAutoresizingMaskIntoConstraints = false
         syncButton.isBordered = false
         syncButton.font = .systemFont(ofSize: 11, weight: .medium)
@@ -218,6 +222,10 @@ final class NoteEditorView: NSView {
             syncButton.topAnchor.constraint(equalTo: topAnchor, constant: 7),
             syncButton.widthAnchor.constraint(equalToConstant: 24),
             syncButton.heightAnchor.constraint(equalToConstant: 24),
+            dragHandle.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 28),
+            dragHandle.trailingAnchor.constraint(equalTo: syncButton.leadingAnchor, constant: -8),
+            dragHandle.centerYAnchor.constraint(equalTo: syncButton.centerYAnchor),
+            dragHandle.heightAnchor.constraint(equalTo: syncButton.heightAnchor),
         ])
     }
 
@@ -489,6 +497,7 @@ final class NoteEditorView: NSView {
     }
 
     func blur() {
+        dragHandle.clearHover()
         hideStatusHint()
         stopNavigation()
         outlineModel.hoveredID = nil

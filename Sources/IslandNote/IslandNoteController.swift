@@ -5,6 +5,18 @@ import OSLog
 final class IslandView: NSView {
     override var isFlipped: Bool { false } // 原点左下，顶 = maxY
     var hitRect = NSRect.zero
+    var onAccessibilityPress: (() -> Void)?
+
+    override func accessibilityPerformPress() -> Bool {
+        guard let onAccessibilityPress else { return false }
+        onAccessibilityPress()
+        return true
+    }
+
+    override func accessibilityFrame() -> NSRect {
+        guard let window, !hitRect.isEmpty else { return super.accessibilityFrame() }
+        return window.convertToScreen(convert(hitRect, to: nil))
+    }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         if !hitRect.isEmpty && !hitRect.contains(point) { return nil }
@@ -14,6 +26,9 @@ final class IslandView: NSView {
 
 /// 无边框、可成为 key 的岛体面板（同 Spirit / DynamicNotchKit 窗口配方）。
 final class IslandPanel: NSPanel {
+    // The transparent shadow gutter may cross screen edges. AppKit must not
+    // reposition this canvas; the visible contour is constrained explicitly.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
     var onSyncSettings: (() -> Void)?
@@ -63,8 +78,7 @@ final class IslandPanel: NSPanel {
     }
 }
 
-/// 固定岛体 + 只动画遮罩形状（借鉴 Spirit NotchApp）。
-/// 所有形态顶边钉在屏幕最顶 → 展开/收回不裂缝。
+/// 停靠时顶边固定在屏幕最顶；拖出时保留同一个编辑器，由拖拽协调器连续移动轮廓。
 @MainActor
 final class IslandNoteController: NSObject {
     private let store: NoteStore
@@ -79,6 +93,9 @@ final class IslandNoteController: NSObject {
     private var maskLayer: CAShapeLayer!
     private var editor: NoteEditorView!
     private var hitGate: IslandView!
+    private var shadowLayer: CALayer!
+    private var dragInteraction: PanelDragCoordinator!
+    private var displayObservation: NSObjectProtocol?
 
     // 几何
     private var screenFrame = NSRect.zero
@@ -88,6 +105,7 @@ final class IslandNoteController: NSObject {
     private var panelH: CGFloat = 240
     private var gutter: CGFloat = 16
     private var eH: CGFloat = 256
+    private var canvasTop: CGFloat { eH - gutter }
 
     private var restRect = NSRect.zero
     private var hoverRect = NSRect.zero
@@ -166,6 +184,11 @@ final class IslandNoteController: NSObject {
         return NSRect(x: o.x + r.minX, y: o.y + r.minY, width: r.width, height: r.height)
     }
 
+    private func screenPoint(for event: NSEvent?) -> NSPoint {
+        guard let event, let window = event.window else { return NSEvent.mouseLocation }
+        return window.convertPoint(toScreen: event.locationInWindow)
+    }
+
     private func radii(for m: Mode) -> (CGFloat, CGFloat) {
         switch m {
         case .expanded: return (expandedTopR, expandedBotR)
@@ -183,18 +206,7 @@ final class IslandNoteController: NSObject {
 
     /// 灵动岛轮廓：顶边全宽 + 顶部微内凹、底部大圆角。顶 = rect.maxY（所有形态共用）。
     private func notchPath(_ r: CGRect, topR: CGFloat, botR: CGFloat) -> CGPath {
-        let L = r.minX, R = r.maxX, T = r.maxY, B = r.minY
-        let p = CGMutablePath()
-        p.move(to: CGPoint(x: L, y: T))
-        p.addQuadCurve(to: CGPoint(x: L + topR, y: T - topR), control: CGPoint(x: L + topR, y: T))
-        p.addLine(to: CGPoint(x: L + topR, y: B + botR))
-        p.addQuadCurve(to: CGPoint(x: L + topR + botR, y: B), control: CGPoint(x: L + topR, y: B))
-        p.addLine(to: CGPoint(x: R - topR - botR, y: B))
-        p.addQuadCurve(to: CGPoint(x: R - topR, y: B + botR), control: CGPoint(x: R - topR, y: B))
-        p.addLine(to: CGPoint(x: R - topR, y: T - topR))
-        p.addQuadCurve(to: CGPoint(x: R, y: T), control: CGPoint(x: R - topR, y: T))
-        p.closeSubpath()
-        return p
+        PanelContour.path(r, floating: 0, topRadius: topR, bottomRadius: botR)
     }
 
     // MARK: - Setup
@@ -212,20 +224,21 @@ final class IslandNoteController: NSObject {
         // 灵动岛比例取中：略扁略宽，不过分
         let barH: CGFloat = 33
         panelH = PanelSize.standard.dimensions.height
-        gutter = 16
+        // Space for the lifted shadow on all sides, including above a floating panel.
+        gutter = 64
         // Keep the window fixed at the largest size, with room for spring overshoot.
         eW = min(PanelSize.large.dimensions.width + gutter * 2, sf.width)
-        eH = min(PanelSize.large.dimensions.height + gutter, sf.height)
+        eH = min(PanelSize.large.dimensions.height + gutter * 2, sf.height + gutter)
 
-        let winFrame = NSRect(x: sf.midX - eW / 2, y: sf.maxY - eH, width: eW, height: eH)
+        let winFrame = NSRect(x: sf.midX - eW / 2, y: sf.maxY - canvasTop, width: eW, height: eH)
 
-        // 可见形状——顶边都 = eH（屏幕最顶），只向下生长
+        // 可见形状顶边 = canvasTop（屏幕最顶），上方透明区域留给悬浮阴影。
         expandedRect = expandedFrame(for: .standard)
         let restW = max(notchW * 1.06, 210) - 11
-        restRect = NSRect(x: (eW - restW) / 2, y: eH - barH, width: restW, height: barH)
+        restRect = NSRect(x: (eW - restW) / 2, y: canvasTop - barH, width: restW, height: barH)
         hoverRect = NSRect(
             x: (eW - restW - 14) / 2,
-            y: eH - barH - 4,
+            y: canvasTop - barH - 4,
             width: restW + 14,
             height: barH + 4
         )
@@ -254,6 +267,12 @@ final class IslandNoteController: NSObject {
         content.hitRect = restRect
         hitGate = content
 
+        shadowLayer = CALayer()
+        shadowLayer.frame = content.bounds
+        shadowLayer.shadowColor = NSColor.black.cgColor
+        shadowLayer.shadowOpacity = 0
+        content.layer?.addSublayer(shadowLayer)
+
         island = IslandView(frame: NSRect(origin: .zero, size: winFrame.size))
         island.wantsLayer = true
         island.autoresizesSubviews = true
@@ -262,6 +281,11 @@ final class IslandNoteController: NSObject {
         maskLayer.frame = island.bounds
         maskLayer.path = notchPath(restRect, topR: compactTopR, botR: compactBotR)
         island.layer?.mask = maskLayer
+        island.hitRect = restRect
+        island.setAccessibilityElement(true)
+        island.setAccessibilityRole(.button)
+        island.setAccessibilityLabel("Open Island Note")
+        island.onAccessibilityPress = { [weak self] in self?.expand() }
 
         editor = NoteEditorView(frame: expandedRect)
         editor.autoresizingMask = []
@@ -288,6 +312,34 @@ final class IslandNoteController: NSObject {
         panel.contentView = content
         panel.orderFrontRegardless()
 
+        dragInteraction = PanelDragCoordinator(panel: panel, mask: maskLayer, shadow: shadowLayer,
+            anchorRect: restRect.offsetBy(dx: winFrame.minX, dy: winFrame.minY), dockOrigin: winFrame.origin,
+            getRect: { [weak self] in self?.expandedRect ?? .zero },
+            onDock: { [weak self] shouldCollapse in
+                guard let self else { return }
+                if shouldCollapse { self.collapse() }
+            })
+        editor.dragHandle.onBegin = { [weak self] point in
+            guard let self, self.mode == .expanded else { return }
+            self.pendingCollapse?.cancel()
+            self.pendingCollapse = nil
+            // Finish any viewport resize before taking a screen-space drag anchor.
+            self.resizeTimer?.invalidate()
+            self.resizeTimer = nil
+            self.pinch.reset()
+            self.editor.frame = self.expandedRect
+            self.hitGate.hitRect = self.expandedRect
+            self.island.hitRect = self.expandedRect
+            self.dragInteraction.begin(at: point)
+        }
+        editor.dragHandle.onMove = { [weak self] in self?.dragInteraction.move(to: $0) }
+        editor.dragHandle.onEnd = { [weak self] in self?.dragInteraction.end(at: $0) }
+        displayObservation = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateDockScreen() }
+        }
+
         installMonitors()
     }
 
@@ -307,12 +359,43 @@ final class IslandNoteController: NSObject {
         }
     }
 
+    private func updateDockScreen() {
+        let screen = notchScreen()
+        screenFrame = screen.frame
+        notchW = 200
+        if let l = screen.auxiliaryTopLeftArea, let r = screen.auxiliaryTopRightArea {
+            let width = screenFrame.width - l.width - r.width
+            if width > 40 { notchW = width }
+        }
+        let width = max(notchW * 1.06, 210) - 11
+        restRect = NSRect(x: (eW - width) / 2, y: canvasTop - 33, width: width, height: 33)
+        hoverRect = restRect.insetBy(dx: -7, dy: 0)
+        hoverRect.origin.y -= 4
+        hoverRect.size.height += 4
+        let origin = NSPoint(x: screenFrame.midX - eW / 2, y: screenFrame.maxY - canvasTop)
+        dragInteraction.updateDock(anchorRect: restRect.offsetBy(dx: origin.x, dy: origin.y), origin: origin)
+        if !dragInteraction.preventsCollapse {
+            hitGate.hitRect = rect(for: mode)
+            island.hitRect = rect(for: mode)
+            let (top, bottom) = radii(for: mode)
+            maskLayer.path = mode == .expanded ? dragInteraction.path(for: expandedRect)
+                : notchPath(rect(for: mode), topR: top, botR: bottom)
+        }
+    }
+
+    deinit {
+        resizeTimer?.invalidate()
+        pendingCollapse?.cancel()
+        for monitor in monitors { NSEvent.removeMonitor(monitor) }
+        if let displayObservation { NotificationCenter.default.removeObserver(displayObservation) }
+    }
+
     private func installMonitors() {
         let g = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] _ in
             self?.handleHover()
         }
         let l = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .scrollWheel]) { [weak self] e in
-            self?.handleHover()
+            self?.handleHover(e)
             return e
         }
         let gc = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] e in
@@ -330,11 +413,12 @@ final class IslandNoteController: NSObject {
             return e
         }
         let lk = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
-            guard let self else { return e }
-            return self.editor.handleKey(e) ?? e
+            guard let self, e.window === self.panel else { return e }
+            return self.editor.handleKey(e)
         }
         let lm = NSEvent.addLocalMonitorForEvents(matching: .magnify) { [weak self] e in
-            guard let self, e.window === self.panel, self.mode == .expanded else { return e }
+            guard let self, e.window === self.panel, self.mode == .expanded,
+                  !self.dragInteraction.isInteracting else { return e }
             return self.handleMagnify(e) ? nil : e
         }
         monitors = [g, l, gc, lc, gr, lr, lk, lm].compactMap { $0 }
@@ -342,8 +426,8 @@ final class IslandNoteController: NSObject {
 
     private func expandedFrame(for size: PanelSize) -> NSRect {
         let width = min(size.dimensions.width, eW)
-        let height = min(size.dimensions.height, eH - gutter)
-        return NSRect(x: (eW - width) / 2, y: eH - height, width: width, height: height)
+        let height = min(size.dimensions.height, canvasTop - gutter)
+        return NSRect(x: (eW - width) / 2, y: canvasTop - height, width: width, height: height)
     }
 
     private func handleMagnify(_ event: NSEvent) -> Bool {
@@ -361,7 +445,7 @@ final class IslandNoteController: NSObject {
         guard size != panelSize else { return }
         panelSize = size
         expandedRect = expandedFrame(for: size)
-        let path = notchPath(expandedRect, topR: expandedTopR, botR: expandedBotR)
+        let path = dragInteraction.path(for: expandedRect)
         let spring = shapeSpring(for: .expanded)
         spring.fromValue = maskLayer.presentation()?.path ?? maskLayer.path
         spring.toValue = path
@@ -369,6 +453,7 @@ final class IslandNoteController: NSObject {
         CATransaction.setDisableActions(true)
         maskLayer.path = path
         maskLayer.add(spring, forKey: "path")
+        dragInteraction.updateShadow(path: path)
         CATransaction.commit()
 
         resizeTimer?.invalidate()
@@ -392,21 +477,24 @@ final class IslandNoteController: NSObject {
         editor.frame = frame
         editor.layoutSubtreeIfNeeded()
         hitGate.hitRect = frame
+        island.hitRect = frame
+        dragInteraction.updateShadow(path: maskLayer.presentation()?.path ?? maskLayer.path!)
         CATransaction.commit()
         if finished {
             resizeTimer?.invalidate()
             resizeTimer = nil
+            dragInteraction.recoverDisplay()
         }
     }
 
     // MARK: - 悬停 / 点击
 
-    private func handleHover() {
-        guard !showingSyncSettings else { return }
+    private func handleHover(_ event: NSEvent? = nil) {
+        guard !showingSyncSettings, !dragInteraction.preventsCollapse else { return }
         // Shrinking can move the edge past a stationary pointer. Wait for the
         // gesture/animation to finish before accepting a new hover-exit movement.
         guard !pinch.isActive, resizeTimer == nil else { return }
-        let loc = NSEvent.mouseLocation
+        let loc = screenPoint(for: event)
         switch mode {
         case .expanded:
             let inExpanded = screenRect(rect(for: .expanded)).insetBy(dx: -10, dy: -8).contains(loc)
@@ -417,7 +505,7 @@ final class IslandNoteController: NSObject {
                 let work = DispatchWorkItem { [weak self] in
                     guard let self else { return }
                     self.pendingCollapse = nil
-                    if self.mode == .expanded,
+                    if self.mode == .expanded, !self.dragInteraction.preventsCollapse,
                        !self.screenRect(self.rect(for: .expanded)).insetBy(dx: -6, dy: -4).contains(NSEvent.mouseLocation) {
                         self.collapse()
                     }
@@ -439,7 +527,8 @@ final class IslandNoteController: NSObject {
     }
 
     private func handleClick(_ e: NSEvent?) {
-        let loc = NSEvent.mouseLocation
+        guard !dragInteraction.preventsCollapse else { return }
+        let loc = screenPoint(for: e)
         switch mode {
         case .expanded:
             if !screenRect(rect(for: .expanded)).insetBy(dx: -8, dy: -8).contains(loc) {
@@ -507,6 +596,10 @@ final class IslandNoteController: NSObject {
     }
 
     func collapse() {
+        if dragInteraction.preventsCollapse {
+            dragInteraction.cancelAndDock(collapse: true)
+            return
+        }
         guard mode == .expanded else {
             if mode == .hover { goTo(.rest) }
             return
@@ -517,7 +610,7 @@ final class IslandNoteController: NSObject {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.finishingCollapse = false
-            guard self.mode == .expanded else { return }
+            guard self.mode == .expanded, !self.dragInteraction.preventsCollapse else { return }
             self.editor.flushPending()
             guard self.store.flushSync() else { return }
             self.goTo(.rest)
@@ -585,9 +678,12 @@ final class IslandNoteController: NSObject {
         pendingCollapse = nil
         mode = m
         hitGate.hitRect = rect(for: m)
+        island.hitRect = rect(for: m)
 
         // 只在展开态显示编辑器，收起时岛体是纯黑胶囊
         let showEditor = (m == .expanded)
+        island.setAccessibilityElement(!showEditor)
+        island.setAccessibilityRole(showEditor ? .group : .button)
         if showEditor {
             editor.frame = expandedRect
             editor.isHidden = false
@@ -599,7 +695,8 @@ final class IslandNoteController: NSObject {
         }
 
         let (tR, bR) = radii(for: m)
-        let path = notchPath(rect(for: m), topR: tR, botR: bR)
+        let path = m == .expanded ? dragInteraction.path(for: expandedRect)
+            : notchPath(rect(for: m), topR: tR, botR: bR)
         let from = maskLayer.presentation()?.path ?? maskLayer.path
 
         let anim = shapeSpring(for: m)
@@ -609,6 +706,7 @@ final class IslandNoteController: NSObject {
         CATransaction.setDisableActions(true)
         maskLayer.path = path
         maskLayer.add(anim, forKey: "path")
+        shadowLayer.shadowOpacity = 0
         CATransaction.commit()
     }
 
