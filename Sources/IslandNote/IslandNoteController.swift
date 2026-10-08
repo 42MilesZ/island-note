@@ -116,6 +116,7 @@ final class IslandNoteController: NSObject {
     private struct FloatingPinchSession {
         var rect: NSRect
         var resumeSize: NSSize?
+        var motionSeed: FloatingResizeMotion?
         var didResize = false
         var wasLimited = false
     }
@@ -124,6 +125,8 @@ final class IslandNoteController: NSObject {
     private var pendingPinchSize: PanelSize?
     private let diagnostics: InteractionDiagnostics
     private var resizeTimer: Timer?
+    private var floatingResizeMotion: FloatingResizeMotion?
+    private var floatingResizeTick: TimeInterval = 0
     private var floatingSize: NSSize?
     private var targetViewportSize: NSSize?
     private struct EdgeResize {
@@ -557,26 +560,23 @@ final class IslandNoteController: NSObject {
     private func magnifyFloating(delta: CGFloat, phase: NSEvent.Phase) -> Bool {
         if phase.contains(.began) { resetPinchGesture() }
         if phase.contains(.cancelled) {
-            let resume = floatingPinchSession?.didResize == false ? floatingPinchSession?.resumeSize : nil
-            floatingPinchSession = nil
-            if let resume { animateViewport(to: resume) }
+            finishFloatingPinch()
             diagnostics.record(.gestureCancelled, state: diagnosticState())
             return true
         }
         if floatingPinchSession == nil {
             guard dragInteraction.prepareForResize() else { return false }
             let resume = targetViewportSize
+            let seed = floatingResizeMotion
             stopViewportAnimation()
             pinch.reset()
             pendingCollapse?.cancel(); pendingCollapse = nil
-            floatingPinchSession = FloatingPinchSession(rect: screenRect(expandedRect), resumeSize: resume)
+            floatingPinchSession = FloatingPinchSession(rect: seed?.rect ?? screenRect(expandedRect), resumeSize: resume, motionSeed: seed)
             diagnostics.record(.continuousResizeBegan, state: diagnosticState())
         }
         defer {
             if phase.contains(.ended) {
-                let resume = floatingPinchSession?.didResize == false ? floatingPinchSession?.resumeSize : nil
-                floatingPinchSession = nil
-                if let resume { animateViewport(to: resume) }
+                finishFloatingPinch()
                 diagnostics.record(.continuousResizeFinished, state: diagnosticState())
             }
         }
@@ -586,7 +586,8 @@ final class IslandNoteController: NSObject {
         let screen = panel.screen ?? notchScreen()
         // Retain subpixel geometry through the gesture instead of accumulating
         // AppKit's backing-pixel rounding in the panel's center on every delta.
-        let result = FloatingPanelLayout.magnified(floatingPinchSession?.rect ?? screenRect(expandedRect), delta: delta,
+        let previousTarget = floatingPinchSession?.rect ?? screenRect(expandedRect)
+        let result = FloatingPanelLayout.magnified(previousTarget, delta: delta,
             maximum: floatingMaximum(screen: screen), screen: screen.visibleFrame)
         floatingPinchSession?.rect = result.rect
         if result.limited, floatingPinchSession?.wasLimited == false {
@@ -594,16 +595,70 @@ final class IslandNoteController: NSObject {
             Haptics.resize()
         }
         floatingPinchSession?.wasLimited = result.limited
-        guard result.rect != screenRect(expandedRect) else { return true }
+        guard result.rect != previousTarget else { return true }
         if floatingPinchSession?.didResize == false {
             if !result.limited { Haptics.resize() }
             floatingPinchSession?.didResize = true
         }
         floatingSize = result.rect.size
-        let local = viewportFrame(size: result.rect.size)
-        panel.setFrameOrigin(NSPoint(x: result.rect.minX - local.minX, y: result.rect.minY - local.minY))
-        applyViewport(size: result.rect.size)
+        followFloatingResize(to: result.rect)
         return true
+    }
+
+    private func finishFloatingPinch() {
+        let session = floatingPinchSession
+        floatingPinchSession = nil
+        guard let session, !session.didResize else { return }
+        if let seed = session.motionSeed {
+            floatingResizeMotion = seed
+            floatingResizeTick = ProcessInfo.processInfo.systemUptime
+            followFloatingResize(to: seed.target)
+        } else if let resume = session.resumeSize {
+            animateViewport(to: resume)
+        }
+    }
+
+    private func displayFloatingResize(_ rect: NSRect) {
+        let local = viewportFrame(size: rect.size)
+        panel.setFrameOrigin(NSPoint(x: rect.minX - local.minX, y: rect.minY - local.minY))
+        applyViewport(size: rect.size)
+    }
+
+    private func followFloatingResize(to rect: NSRect) {
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            stopViewportAnimation()
+            displayFloatingResize(rect)
+            diagnostics.record(.resizeCompleted, state: diagnosticState())
+            return
+        }
+        advanceFloatingResize()
+        if floatingResizeMotion == nil {
+            floatingResizeMotion = floatingPinchSession?.motionSeed ?? FloatingResizeMotion(rect: screenRect(expandedRect))
+        }
+        floatingPinchSession?.motionSeed = nil
+        floatingResizeMotion?.target = rect
+        targetViewportSize = rect.size
+        floatingResizeTick = ProcessInfo.processInfo.systemUptime
+        guard resizeTimer == nil else { return }
+        let timer = Timer(timeInterval: 1 / Double(max(60, panel.screen?.maximumFramesPerSecond ?? 60)), repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.advanceFloatingResize() }
+        }
+        resizeTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func advanceFloatingResize() {
+        guard var motion = floatingResizeMotion else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        motion.advance(by: now - floatingResizeTick)
+        floatingResizeTick = now
+        let screen = panel.screen ?? notchScreen()
+        let visible = FloatingPanelLayout.magnified(motion.rect, delta: 0,
+            maximum: floatingMaximum(screen: screen), screen: screen.visibleFrame).rect
+        motion.constrain(to: visible)
+        floatingResizeMotion = motion
+        displayFloatingResize(motion.isSettled ? motion.target : motion.rect)
+        if motion.isSettled { stopViewportAnimation(completed: true) }
     }
 
     private func resize(to size: PanelSize) {
@@ -621,6 +676,7 @@ final class IslandNoteController: NSObject {
         }
         resizeTimer?.invalidate()
         resizeTimer = nil
+        floatingResizeMotion = nil
         targetViewportSize = nil
     }
 
