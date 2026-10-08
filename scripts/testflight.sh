@@ -11,6 +11,7 @@ build_number="${BUILD_NUMBER:-5}"
 archive_path="$PWD/.build/testflight/$build_number/IslandNote.xcarchive"
 export_path="$PWD/.build/testflight/$build_number/export"
 mkdir -p "$export_path" dist
+./scripts/update-icon.sh
 xcodegen generate
 xcodebuild -project IslandNote.xcodeproj -scheme IslandNote \
     -destination 'generic/platform=macOS' -derivedDataPath .build/TestFlightDerived \

@@ -1,5 +1,7 @@
 # Island Note
 
+<img src="Resources/AppIcon.svg" width="128" height="128" alt="Island Note icon">
+
 A small macOS scratchpad in a black capsule at the top of the screen. Hover to open it, write with live-rendered Markdown, and move away or press `Esc` to collapse it.
 
 Drag the empty header beside the status dot to pull the note out into an always-on-top floating panel. Hovering the header shows a rounded white highlight at 10% opacity. A short movement stretches the bubble connection; pulling farther separates it with one trackpad haptic. The shadow spreads and shifts down while dragging, then settles when released. Floating notes stay open when the pointer leaves or another app is clicked. The text, selection, undo history and scroll position stay in the same editor.
@@ -41,6 +43,10 @@ make run
 ```
 
 `make package` builds a fresh signed `IslandNote.app` without opening it, with an application icon and version metadata. Previous bundles are kept recoverable under the ignored `.build/` directory.
+
+`Resources/AppIcon.svg` is the shared icon source. Run `make icons` to regenerate
+the ICNS used by Xcode. Direct packaging and TestFlight packaging generate their
+icons from the same SVG automatically; all ten standard macOS icon sizes retain transparency.
 
 ## Note file
 

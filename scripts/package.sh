@@ -20,7 +20,7 @@ bin_dir="$(swift build -c release --show-bin-path)"
 staging="$(mktemp -d "$PWD/.build/package.XXXXXX")"
 app="$staging/IslandNote.app"
 output="$PWD/IslandNote.app"
-mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" .build/AppIcon.iconset
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin_dir/IslandNote" "$app/Contents/MacOS/IslandNote"
 cp -R "$bin_dir/IslandNote_IslandNote.bundle" "$app/Contents/Resources/"
 cp Resources/ThirdPartyNotices.txt "$app/Contents/Resources/"
@@ -28,8 +28,7 @@ cp Resources/PrivacyInfo.xcprivacy "$app/Contents/Resources/"
 cp Resources/Info.plist "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${APP_VERSION:-1.0}" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER:-5}" "$app/Contents/Info.plist"
-swift scripts/make-icon.swift .build/AppIcon.iconset
-iconutil -c icns .build/AppIcon.iconset -o "$app/Contents/Resources/AppIcon.icns"
+./scripts/update-icon.sh "$app/Contents/Resources/AppIcon.icns"
 if [[ "$identity" == "-" ]]; then
     echo "Development-only ad-hoc build: Keychain approval may recur after updates." >&2
     codesign --force --sign - "$app"

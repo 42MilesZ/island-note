@@ -1,9 +1,12 @@
-.PHONY: all build package package-dev run notarize audit testflight
+.PHONY: all build icons package package-dev run notarize audit testflight
 
 all: package
 
 build:
 	swift build -c release --product IslandNote
+
+icons:
+	./scripts/update-icon.sh
 
 # Stable Developer ID signing is the default; signing failures stop packaging.
 package:
