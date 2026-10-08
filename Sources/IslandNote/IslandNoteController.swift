@@ -113,6 +113,14 @@ final class IslandNoteController: NSObject {
     private var expandedRect = NSRect.zero
     private var panelSize: PanelSize = .standard
     private var pinch = PanelPinch()
+    private struct FloatingPinchSession {
+        var rect: NSRect
+        var resumeSize: NSSize?
+        var didResize = false
+        var wasLimited = false
+    }
+    private var floatingPinchSession: FloatingPinchSession?
+    private var isPinching: Bool { pinch.isActive || floatingPinchSession != nil }
     private var pendingPinchSize: PanelSize?
     private let diagnostics: InteractionDiagnostics
     private var resizeTimer: Timer?
@@ -349,7 +357,7 @@ final class IslandNoteController: NSObject {
             self.pendingCollapse = nil
             // A new grab starts from the currently displayed intermediate viewport.
             self.stopViewportAnimation()
-            self.pinch.reset()
+            self.resetPinchGesture()
             self.pendingPinchSize = nil
             self.editor.frame = self.expandedRect
             self.hitGate.hitRect = self.expandedRect
@@ -410,6 +418,7 @@ final class IslandNoteController: NSObject {
         let origin = NSPoint(x: screenFrame.midX - eW / 2, y: screenFrame.maxY - canvasTop)
         dragInteraction.updateDock(anchorRect: restRect.offsetBy(dx: origin.x, dy: origin.y), origin: origin)
         if dragInteraction.isFloating, !dragInteraction.isInteracting {
+            resetPinchGesture()
             edgeResize = nil
             stopViewportAnimation()
             let fitted = FloatingPanelLayout.clamped(floatingSize ?? expandedRect.size, maximum: floatingMaximum())
@@ -463,7 +472,7 @@ final class IslandNoteController: NSObject {
             guard e.window === self.panel else {
                 self.diagnostics.record(.pinchReceived, state: self.diagnosticState(), delta: e.magnification, phase: e.phase)
                 self.diagnostics.record(.wrongWindow, state: self.diagnosticState(), delta: e.magnification, phase: e.phase)
-                if e.phase.contains(.ended) || e.phase.contains(.cancelled) { self.pinch.reset() }
+                if e.phase.contains(.ended) || e.phase.contains(.cancelled) { self.resetPinchGesture() }
                 return e
             }
             return self.handleMagnify(e) ? nil : e
@@ -508,7 +517,7 @@ final class IslandNoteController: NSObject {
         diagnostics.record(.pinchReceived, state: diagnosticState(), delta: delta, phase: phase)
         func reject(_ reason: InteractionDiagnosticReason) -> Bool {
             diagnostics.record(reason, state: diagnosticState(), delta: delta, phase: phase)
-            if phase.contains(.ended) || phase.contains(.cancelled) { pinch.reset() }
+            if phase.contains(.ended) || phase.contains(.cancelled) { resetPinchGesture() }
             return false
         }
         guard mode == .expanded else { return reject(.panelClosed) }
@@ -516,14 +525,15 @@ final class IslandNoteController: NSObject {
         guard !dragInteraction.isDragging else { return reject(.headerDragging) }
         // The editor is already visible while its opening contour is still animating.
         // Accept gestures on the editor, rather than only the smaller presentation mask.
-        guard pinch.isActive || expandedRect.contains(locationInWindow) else { return reject(.outsidePanel) }
+        guard isPinching || expandedRect.contains(locationInWindow) else { return reject(.outsidePanel) }
+        if dragInteraction.isFloating, !dragInteraction.isDocking {
+            return magnifyFloating(delta: delta, phase: phase)
+        }
         if phase.contains(.began), pinch.isActive { diagnostics.record(.gestureInterrupted, state: diagnosticState()) }
         if !dragInteraction.isDocking { _ = dragInteraction.prepareForResize() }
         pendingCollapse?.cancel()
         pendingCollapse = nil
-        let current: PanelSize? = pendingPinchSize ?? (dragInteraction.isFloating && !dragInteraction.isDocking
-            ? [PanelSize.standard, .large].first { $0.floatingDimensions == floatingSize }
-            : panelSize)
+        let current: PanelSize? = pendingPinchSize ?? panelSize
         let evaluation = pinch.evaluate(delta: delta, phase: phase, size: current)
         if evaluation != .alreadyCommitted, evaluation != .waiting || phase.contains(.ended) {
             diagnostics.record(evaluation.reason, state: diagnosticState(), delta: delta, phase: phase)
@@ -538,22 +548,68 @@ final class IslandNoteController: NSObject {
         return true
     }
 
-    private func resize(to size: PanelSize) {
-        if dragInteraction.isFloating {
-            let current = floatingSize ?? expandedRect.size
-            let isPreset = [PanelSize.standard, .large].contains { $0.floatingDimensions == current }
-            let scale: CGFloat = size == .large ? 1.2 : 1 / 1.2
-            let requested = isPreset ? size.floatingDimensions
-                : NSSize(width: current.width * scale, height: current.height * scale)
-            let target = FloatingPanelLayout.clamped(requested, maximum: floatingMaximum())
-            guard target != expandedRect.size else { diagnostics.record(.sizeLimit, state: diagnosticState()); return }
-            floatingSize = target
-            animateViewport(to: target)
-        } else {
-            guard size != panelSize else { diagnostics.record(.presetLimit, state: diagnosticState()); return }
-            panelSize = size
-            animateViewport(to: size.dimensions)
+    private func resetPinchGesture() {
+        if floatingPinchSession != nil { diagnostics.record(.gestureInterrupted, state: diagnosticState()) }
+        floatingPinchSession = nil
+        pinch.reset()
+    }
+
+    private func magnifyFloating(delta: CGFloat, phase: NSEvent.Phase) -> Bool {
+        if phase.contains(.began) { resetPinchGesture() }
+        if phase.contains(.cancelled) {
+            let resume = floatingPinchSession?.didResize == false ? floatingPinchSession?.resumeSize : nil
+            floatingPinchSession = nil
+            if let resume { animateViewport(to: resume) }
+            diagnostics.record(.gestureCancelled, state: diagnosticState())
+            return true
         }
+        if floatingPinchSession == nil {
+            guard dragInteraction.prepareForResize() else { return false }
+            let resume = targetViewportSize
+            stopViewportAnimation()
+            pinch.reset()
+            pendingCollapse?.cancel(); pendingCollapse = nil
+            floatingPinchSession = FloatingPinchSession(rect: screenRect(expandedRect), resumeSize: resume)
+            diagnostics.record(.continuousResizeBegan, state: diagnosticState())
+        }
+        defer {
+            if phase.contains(.ended) {
+                let resume = floatingPinchSession?.didResize == false ? floatingPinchSession?.resumeSize : nil
+                floatingPinchSession = nil
+                if let resume { animateViewport(to: resume) }
+                diagnostics.record(.continuousResizeFinished, state: diagnosticState())
+            }
+        }
+        guard delta.isFinite else { diagnostics.record(.invalidGesture, state: diagnosticState()); return true }
+        // Zero-valued lifecycle events must not snap an interrupted viewport to a limit.
+        guard delta != 0 else { return true }
+        let screen = panel.screen ?? notchScreen()
+        // Retain subpixel geometry through the gesture instead of accumulating
+        // AppKit's backing-pixel rounding in the panel's center on every delta.
+        let result = FloatingPanelLayout.magnified(floatingPinchSession?.rect ?? screenRect(expandedRect), delta: delta,
+            maximum: floatingMaximum(screen: screen), screen: screen.visibleFrame)
+        floatingPinchSession?.rect = result.rect
+        if result.limited, floatingPinchSession?.wasLimited == false {
+            diagnostics.record(.sizeLimit, state: diagnosticState())
+            Haptics.resize()
+        }
+        floatingPinchSession?.wasLimited = result.limited
+        guard result.rect != screenRect(expandedRect) else { return true }
+        if floatingPinchSession?.didResize == false {
+            if !result.limited { Haptics.resize() }
+            floatingPinchSession?.didResize = true
+        }
+        floatingSize = result.rect.size
+        let local = viewportFrame(size: result.rect.size)
+        panel.setFrameOrigin(NSPoint(x: result.rect.minX - local.minX, y: result.rect.minY - local.minY))
+        applyViewport(size: result.rect.size)
+        return true
+    }
+
+    private func resize(to size: PanelSize) {
+        guard size != panelSize else { diagnostics.record(.presetLimit, state: diagnosticState()); return }
+        panelSize = size
+        animateViewport(to: size.dimensions)
         Haptics.resize()
         logger.info("Panel size target: \(self.targetViewportSize?.width ?? self.expandedRect.width, privacy: .public) x \(self.targetViewportSize?.height ?? self.expandedRect.height, privacy: .public)")
     }
@@ -616,7 +672,7 @@ final class IslandNoteController: NSObject {
     func beginEdgeResize(edges: PanelResizeEdges, at mouse: NSPoint) {
         guard mode == .expanded, dragInteraction.isFloating, dragInteraction.prepareForResize() else { return }
         stopViewportAnimation()
-        pinch.reset()
+        resetPinchGesture()
         dragInteraction.recoverDisplay()
         let screen = panel.screen ?? notchScreen()
         let fitted = FloatingPanelLayout.clamped(expandedRect.size, maximum: floatingMaximum(screen: screen))
@@ -652,7 +708,7 @@ final class IslandNoteController: NSObject {
         guard !showingSyncSettings, !dragInteraction.preventsCollapse else { return }
         // Shrinking can move the edge past a stationary pointer. Wait for the
         // gesture/animation to finish before accepting a new hover-exit movement.
-        guard !pinch.isActive, resizeTimer == nil else { return }
+        guard !isPinching, resizeTimer == nil else { return }
         let loc = screenPoint(for: event)
         switch mode {
         case .expanded:
@@ -890,7 +946,7 @@ final class IslandNoteController: NSObject {
         edgeResize = nil
         resizeHandles.isEnabled = false
         if m != .expanded { expandedRect = expandedFrame(for: panelSize) }
-        pinch.reset()
+        resetPinchGesture()
         pendingPinchSize = nil
         pendingCollapse?.cancel()
         pendingCollapse = nil

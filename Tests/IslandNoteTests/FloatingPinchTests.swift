@@ -48,11 +48,13 @@ final class FloatingPinchTests: XCTestCase {
         XCTAssertEqual(panel.level, .floating)
 
         // The old release flight blocked this gesture or erased its resize spring.
+        let initialSize = editor.frame.size
         let location = NSPoint(x: originalFrame.midX, y: originalFrame.midY)
         XCTAssertTrue(controller.handleMagnification(delta: 0.1, phase: .began, locationInWindow: location))
         XCTAssertTrue(controller.handleMagnification(delta: 0, phase: .ended, locationInWindow: location))
         settle()
-        XCTAssertEqual(editor.frame.size, PanelSize.large.floatingDimensions)
+        XCTAssertEqual(editor.frame.width, initialSize.width * 1.1, accuracy: 0.1)
+        XCTAssertEqual(editor.frame.height, initialSize.height * 1.1, accuracy: 0.1)
         XCTAssertEqual(panel.level, .floating)
         XCTAssertEqual(controller.mode, .expanded)
         let visible = editor.frame.offsetBy(dx: panel.frame.minX, dy: panel.frame.minY)
@@ -64,10 +66,11 @@ final class FloatingPinchTests: XCTestCase {
         XCTAssertEqual(resizedFont.pointSize, font.pointSize)
 
         let largeLocation = NSPoint(x: editor.frame.midX, y: editor.frame.midY)
-        XCTAssertTrue(controller.handleMagnification(delta: -0.1, phase: .began, locationInWindow: largeLocation))
+        XCTAssertTrue(controller.handleMagnification(delta: -0.05, phase: .began, locationInWindow: largeLocation))
         XCTAssertTrue(controller.handleMagnification(delta: 0, phase: .ended, locationInWindow: largeLocation))
         settle()
-        XCTAssertEqual(editor.frame.size, PanelSize.standard.floatingDimensions)
+        XCTAssertEqual(editor.frame.width, initialSize.width * 1.1 * 0.95, accuracy: 0.1)
+        XCTAssertEqual(editor.frame.height, initialSize.height * 1.1 * 0.95, accuracy: 0.1)
         XCTAssertEqual(text.string, source)
         XCTAssertEqual(text.selectedRange(), selection)
 

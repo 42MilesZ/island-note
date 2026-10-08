@@ -17,6 +17,24 @@ enum FloatingPanelLayout {
                height: min(maximum.height, max(minimum.height, size.height)))
     }
 
+    /// Native magnification changes the current size proportionally. Clamp each
+    /// delta so reversing at a limit responds immediately without accumulated overshoot.
+    static func magnified(_ rect: NSRect, delta: CGFloat, maximum: NSSize,
+                          screen: NSRect) -> (rect: NSRect, limited: Bool) {
+        guard delta.isFinite, rect.width > 0, rect.height > 0,
+              maximum.width > 0, maximum.height > 0, screen.width > 0, screen.height > 0 else { return (rect, false) }
+        let available = NSSize(width: min(maximum.width, screen.width), height: min(maximum.height, screen.height))
+        let upper = min(available.width / rect.width, available.height / rect.height)
+        let lower = min(upper, max(minimum.width / rect.width, minimum.height / rect.height))
+        let requested = 1 + delta
+        let scale = min(upper, max(lower, requested))
+        let size = NSSize(width: min(available.width, rect.width * scale), height: min(available.height, rect.height * scale))
+        var result = NSRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2,
+                            width: size.width, height: size.height)
+        result.origin = PanelDocking.constrainedOrigin(result.origin, rect: NSRect(origin: .zero, size: size), screen: screen)
+        return (result, abs(scale - requested) > 0.00001)
+    }
+
     /// The opposite edge stays fixed; dragging a corner changes both axes.
     static func resized(_ rect: NSRect, edges: PanelResizeEdges, delta: NSPoint,
                         maximum: NSSize, screen: NSRect) -> NSRect {

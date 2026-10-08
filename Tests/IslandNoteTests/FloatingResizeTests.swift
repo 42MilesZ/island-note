@@ -107,8 +107,8 @@ final class FloatingResizeTests: XCTestCase {
             pinch(controller, editor: editor, delta: -0.1)
             settle()
             let custom = editor.frame.size
-            XCTAssertEqual(custom.width, 560 / 1.2, accuracy: 0.1)
-            XCTAssertEqual(custom.height, 500, accuracy: 0.1)
+            XCTAssertEqual(custom.width, 504, accuracy: 0.1)
+            XCTAssertEqual(custom.height, 540, accuracy: 0.1)
             try snapshot(editor, name: "floating-custom")
             XCTAssertEqual(text.string, source)
             XCTAssertEqual(text.selectedRange(), selection)
@@ -146,9 +146,8 @@ final class FloatingResizeTests: XCTestCase {
             editor.dragHandle.onBegin?(start)
             editor.dragHandle.onMove?(release)
             editor.dragHandle.onEnd?(release)
-            settle()
-            pinch(controller, editor: editor, delta: -0.1)
-            settle(0.08)
+            // The return flight is over, but the floating aspect morph is still active.
+            settle(0.27)
             let before = screenRect(panel, editor)
             let grip = NSPoint(x: before.minX + before.width * 0.15, y: before.maxY - PanelDocking.headerInset)
             editor.dragHandle.onBegin?(grip)
@@ -164,7 +163,7 @@ final class FloatingResizeTests: XCTestCase {
             XCTAssertEqual(after.maxY - PanelDocking.headerInset, moved.y, accuracy: 1)
             editor.dragHandle.onEnd?(moved)
             settle()
-            XCTAssertEqual(editor.frame.size, PanelSize.standard.floatingDimensions)
+            XCTAssertEqual(editor.frame.size, PanelSize.large.floatingDimensions)
         }
     }
 
@@ -202,6 +201,68 @@ final class FloatingResizeTests: XCTestCase {
             XCTAssertTrue(controller.handleMagnification(delta: 0, phase: .ended, locationInWindow: location))
             settle()
             XCTAssertEqual(editor.frame.size, PanelSize.large.dimensions)
+        }
+    }
+
+    func testFloatingPinchFollowsEveryDeltaWithStableCenterAndReversibleLimits() throws {
+        let diagnostics = InteractionDiagnostics(defaults: nil, enabled: true)
+        try withPanel(diagnostics: diagnostics) { controller, panel, editor, text in
+            let start = header(panel, editor)
+            let release = NSPoint(x: start.x + 80, y: start.y - 170)
+            editor.dragHandle.onBegin?(start)
+            editor.dragHandle.onMove?(release)
+            editor.dragHandle.onEnd?(release)
+            settle()
+            let initial = screenRect(panel, editor)
+            let location = NSPoint(x: editor.frame.midX, y: editor.frame.midY)
+            XCTAssertTrue(controller.handleMagnification(delta: 0, phase: .began, locationInWindow: location))
+            var size = initial.size
+            for delta: CGFloat in [0.01, 0.015, 0.02, 0.01, -0.03] {
+                XCTAssertTrue(controller.handleMagnification(delta: delta, phase: .changed, locationInWindow: location))
+                size.width *= 1 + delta; size.height *= 1 + delta
+                XCTAssertEqual(editor.frame.width, size.width, accuracy: 0.001)
+                XCTAssertEqual(editor.frame.height, size.height, accuracy: 0.001)
+                let visible = screenRect(panel, editor)
+                XCTAssertEqual(visible.midX, initial.midX, accuracy: 1)
+                XCTAssertEqual(visible.midY, initial.midY, accuracy: 1)
+            }
+            // Continue within the same gesture past the old large preset, then reverse.
+            XCTAssertTrue(controller.handleMagnification(delta: 100, phase: .changed, locationInWindow: location))
+            let screen = try XCTUnwrap(panel.screen).visibleFrame
+            let largest = screenRect(panel, editor)
+            XCTAssertLessThanOrEqual(largest.width, min(1200, screen.width) + 1)
+            XCTAssertLessThanOrEqual(largest.height, min(1000, screen.height) + 1)
+            XCTAssertGreaterThanOrEqual(largest.minX, screen.minX - 1)
+            XCTAssertGreaterThanOrEqual(largest.minY, screen.minY - 1)
+            XCTAssertLessThanOrEqual(largest.maxX, screen.maxX + 1)
+            XCTAssertLessThanOrEqual(largest.maxY, screen.maxY + 1)
+            XCTAssertTrue(controller.handleMagnification(delta: -0.01, phase: .changed, locationInWindow: location))
+            XCTAssertLessThan(editor.frame.width, largest.width)
+            XCTAssertTrue(controller.handleMagnification(delta: -100, phase: .changed, locationInWindow: location))
+            let smallest = editor.frame.size
+            XCTAssertGreaterThanOrEqual(smallest.width, 320 - 0.01)
+            XCTAssertGreaterThanOrEqual(smallest.height, 280 - 0.01)
+            XCTAssertTrue(controller.handleMagnification(delta: 0.01, phase: .changed, locationInWindow: location))
+            XCTAssertGreaterThan(editor.frame.width, smallest.width)
+            XCTAssertGreaterThan(editor.frame.height, smallest.height)
+            XCTAssertTrue(controller.handleMagnification(delta: 0.01, phase: .ended, locationInWindow: location))
+            XCTAssertEqual(editor.frame.width, smallest.width * 1.01 * 1.01, accuracy: 0.001)
+            XCTAssertEqual(text.string, source)
+            XCTAssertEqual(diagnostics.events.filter { $0.reason == .sizeLimit }.count, 2)
+            XCTAssertEqual(diagnostics.events.last?.reason, .continuousResizeFinished)
+        }
+    }
+
+    func testZeroMotionFloatingPinchResumesDetachmentMorph() throws {
+        try withPanel { controller, panel, editor, _ in
+            let start = header(panel, editor)
+            let release = NSPoint(x: start.x + 80, y: start.y - 170)
+            editor.dragHandle.onBegin?(start)
+            editor.dragHandle.onMove?(release)
+            editor.dragHandle.onEnd?(release)
+            pinch(controller, editor: editor, delta: 0)
+            settle()
+            XCTAssertEqual(editor.frame.size, PanelSize.standard.floatingDimensions)
         }
     }
 }

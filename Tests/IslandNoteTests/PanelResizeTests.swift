@@ -34,6 +34,31 @@ final class PanelResizeTests: XCTestCase {
         XCTAssertEqual(capped.size, NSSize(width: 500, height: 500))
     }
 
+    func testMagnificationIsProportionalCenteredAndImmediatelyReversibleAtLimits() {
+        let first = FloatingPanelLayout.magnified(original, delta: 0.01, maximum: FloatingPanelLayout.maximum, screen: screen)
+        XCTAssertEqual(first.rect.width, 424.2, accuracy: 0.001)
+        XCTAssertEqual(first.rect.height, 464.6, accuracy: 0.001)
+        XCTAssertEqual(first.rect.midX, original.midX, accuracy: 0.001)
+        XCTAssertEqual(first.rect.midY, original.midY, accuracy: 0.001)
+        XCTAssertFalse(first.limited)
+        let largest = FloatingPanelLayout.magnified(first.rect, delta: 100, maximum: FloatingPanelLayout.maximum, screen: screen)
+        XCTAssertTrue(largest.limited)
+        XCTAssertTrue(screen.contains(largest.rect))
+        XCTAssertEqual(largest.rect.width / largest.rect.height, original.width / original.height, accuracy: 0.0001)
+        let reverse = FloatingPanelLayout.magnified(largest.rect, delta: -0.01, maximum: FloatingPanelLayout.maximum, screen: screen)
+        XCTAssertLessThan(reverse.rect.width, largest.rect.width)
+        XCTAssertLessThan(reverse.rect.height, largest.rect.height)
+        XCTAssertFalse(reverse.limited)
+        let smallest = FloatingPanelLayout.magnified(reverse.rect, delta: -100, maximum: FloatingPanelLayout.maximum, screen: screen)
+        XCTAssertTrue(smallest.limited)
+        XCTAssertEqual(smallest.rect.width, 320, accuracy: 0.001)
+        XCTAssertGreaterThanOrEqual(smallest.rect.height, 280)
+        let expand = FloatingPanelLayout.magnified(smallest.rect, delta: 0.01, maximum: FloatingPanelLayout.maximum, screen: screen)
+        XCTAssertGreaterThan(expand.rect.width, smallest.rect.width)
+        XCTAssertFalse(expand.limited)
+        XCTAssertEqual(FloatingPanelLayout.magnified(original, delta: .nan, maximum: FloatingPanelLayout.maximum, screen: screen).rect, original)
+    }
+
     @MainActor
     func testOnlyEdgesAndCornersInterceptInput() {
         _ = NSApplication.shared
