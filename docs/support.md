@@ -25,6 +25,8 @@ Flomo 默认关闭。在设置中开启，阅读数据用途说明，然后选�
 
 ## 反馈问题
 
+你可以发送邮件至 [862325259@qq.com](mailto:862325259@qq.com) 反馈问题。请附上应用版本、macOS 版本及复现步骤，避免发送私人笔记或令牌。
+
 在设置中开启本机诊断，重现问题后导出报告。报告不会自动上传；关闭诊断后保留旧记录，清除记录只删除本机诊断文件。
 
 通过 [项目问题反馈](https://github.com/42MilesZ/island-note/issues) 描述发生了什么、预期结果、应用版本及 macOS 版本。请避免在公开反馈中上传私人笔记、令牌或包含私人信息的截图。保存失败时保留编辑器中的文字，并检查红色状态提示后再退出。
@@ -59,6 +61,8 @@ Sync supports paragraphs, headings, bold text and ordinary lists. Tables, code b
 Turning Flomo off stops new requests and retains both notes, the token and local backups. Core local-note features need neither a Flomo account nor an internet connection.
 
 ## Reporting an issue
+
+Contact [862325259@qq.com](mailto:862325259@qq.com) for support. Include your app version, macOS version and steps to reproduce the issue. Avoid sending private notes or tokens.
 
 Enable local diagnostics in Settings, reproduce the problem and export a report. Nothing uploads automatically. Turning recording off keeps existing records; Clear Records deletes the local diagnostic files.
 
