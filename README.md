@@ -10,6 +10,16 @@ Pulling the note out smoothly changes the wide docked panel into a taller, nearl
 
 While docked, spread two fingers on the trackpad to enlarge from 460 × 275 to 690 × 550 points; pinch inward to restore the default. Floating presets are 420 × 460 and 560 × 620 points. After an edge resize, each spread increases both dimensions by 20%, and each inward pinch divides them by 1.2, subject to size limits. A pinch can start immediately after releasing a floating panel. Each gesture commits once with a smooth transition and a haptic pulse; text stays the same size. Floating panels adjust their position to stay on screen. Custom floating dimensions are remembered until the app quits; docking restores the selected wide docked size, and the next pull-out restores the floating dimensions. Grabbing a transitioning panel keeps the current viewport under the pointer, and releasing a stationary grab resumes the size transition. Double-click still selects text normally.
 
+Pinches received during a return to the island are queued until docking finishes. During opening, the editor's full footprint accepts a pinch even while its contour is still expanding. A held header or edge resize temporarily owns the interaction; the next pinch is accepted after release.
+
+## Local interaction diagnostics
+
+Right-click the island or panel → **开发者诊断（本机）** → **自动收集交互诊断**. Collection is off by default and the setting survives restarts. When enabled, the app automatically records gesture phases, sampled magnification deltas, panel dimensions, focus and interaction states, and resize outcomes. It explains rejected gestures, preset/display limits, queued docking gestures, interruptions and a target-size mismatch. These are rule-based clues; they do not detect every bug or run a background AI agent.
+
+The most recent 300 records persist across restarts in `~/Library/Application Support/IslandNote/Diagnostics/events.jsonl`; `latest-report.md` contains the automatic findings and recent state timeline. In the sandboxed TestFlight app, this directory is inside its Application Support container. High-frequency changed events are sampled at most every 0.1 seconds; lifecycle events and decisions are retained. Disk writes are batched off the UI thread, the directory is private to the current user, and the files are limited to 300 records. No note text, note paths, screenshots, credentials, account data or other-app activity is collected or uploaded. Turning the switch off stops new collection and keeps existing records.
+
+Use **记录刚才的交互异常** to mark a reproducible failure, or **查看诊断报告…** to open the report directory. On a later bug report, the local diagnostic files can be read directly without requiring a screenshot or note contents. If no magnification event was received in the preceding minute, the marker reports that gap rather than inventing a gesture failure.
+
 Notes with three or more Markdown headings show a small outline in the left margin. Bar lengths reflect heading levels, and the current section is highlighted as you scroll. Hover a bar to preview its title with a light haptic tick; click to scroll smoothly to that section without moving the text selection or adding another haptic pulse. Below three headings, the outline is hidden and does not respond to hovering. Longer outlines can scroll independently, and Reduce Motion is respected.
 
 ## Run

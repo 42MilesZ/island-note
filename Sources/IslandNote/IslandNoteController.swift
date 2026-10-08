@@ -113,6 +113,8 @@ final class IslandNoteController: NSObject {
     private var expandedRect = NSRect.zero
     private var panelSize: PanelSize = .standard
     private var pinch = PanelPinch()
+    private var pendingPinchSize: PanelSize?
+    private let diagnostics: InteractionDiagnostics
     private var resizeTimer: Timer?
     private var floatingSize: NSSize?
     private var targetViewportSize: NSSize?
@@ -124,7 +126,7 @@ final class IslandNoteController: NSObject {
         let screen: NSRect
     }
     private var edgeResize: EdgeResize?
-    private let logger = Logger(subsystem: "com.islandnote", category: "PanelResize")
+    private let logger = Logger(subsystem: "local.projects.island-note", category: "PanelResize")
 
     private let compactTopR: CGFloat = 10
     private let compactBotR: CGFloat = 20
@@ -138,12 +140,14 @@ final class IslandNoteController: NSObject {
     private var finishingCollapse = false
     private var monitors: [Any] = []
 
-    init(store: NoteStore, enableSync: Bool = true) {
+    init(store: NoteStore, enableSync: Bool = true, diagnostics: InteractionDiagnostics? = nil) {
         self.store = store
+        self.diagnostics = diagnostics ?? (enableSync ? .shared : InteractionDiagnostics(defaults: nil, enabled: false))
         super.init()
         installMainMenu()
         setup()
         bindStore()
+        self.diagnostics.record(.checkpoint, state: diagnosticState())
         #if !ISLAND_TESTFLIGHT
         if enableSync { setupSync() }
         #endif
@@ -330,7 +334,11 @@ final class IslandNoteController: NSObject {
             getRect: { [weak self] in self?.expandedRect ?? .zero },
             onDock: { [weak self] shouldCollapse in
                 guard let self else { return }
-                if shouldCollapse { self.collapse() }
+                if shouldCollapse { self.pendingPinchSize = nil; self.collapse() }
+                else if let size = self.pendingPinchSize {
+                    self.pendingPinchSize = nil
+                    self.resize(to: size)
+                }
             }, getTargetRect: { [weak self] in
                 guard let self else { return .zero }
                 return self.viewportFrame(size: self.targetViewportSize ?? self.expandedRect.size)
@@ -342,15 +350,18 @@ final class IslandNoteController: NSObject {
             // A new grab starts from the currently displayed intermediate viewport.
             self.stopViewportAnimation()
             self.pinch.reset()
+            self.pendingPinchSize = nil
             self.editor.frame = self.expandedRect
             self.hitGate.hitRect = self.expandedRect
             self.island.hitRect = self.expandedRect
             self.dragInteraction.begin(at: point)
+            self.diagnostics.record(.headerGrabbed, state: self.diagnosticState())
         }
         editor.dragHandle.onMove = { [weak self] in self?.dragInteraction.move(to: $0) }
         editor.dragHandle.onEnd = { [weak self] point in
             guard let self else { return }
             self.dragInteraction.end(at: point)
+            self.diagnostics.record(.headerReleased, state: self.diagnosticState())
             if self.mode == .expanded, !self.dragInteraction.isFloating, !self.dragInteraction.isInteracting {
                 self.animateViewport(to: self.panelSize.dimensions)
             }
@@ -448,7 +459,13 @@ final class IslandNoteController: NSObject {
             return self.editor.handleKey(e)
         }
         let lm = NSEvent.addLocalMonitorForEvents(matching: .magnify) { [weak self] e in
-            guard let self, e.window === self.panel, self.mode == .expanded else { return e }
+            guard let self else { return e }
+            guard e.window === self.panel else {
+                self.diagnostics.record(.pinchReceived, state: self.diagnosticState(), delta: e.magnification, phase: e.phase)
+                self.diagnostics.record(.wrongWindow, state: self.diagnosticState(), delta: e.magnification, phase: e.phase)
+                if e.phase.contains(.ended) || e.phase.contains(.cancelled) { self.pinch.reset() }
+                return e
+            }
             return self.handleMagnify(e) ? nil : e
         }
         monitors = [g, l, gc, lc, gr, lr, lk, lm].compactMap { $0 }
@@ -480,6 +497,7 @@ final class IslandNoteController: NSObject {
             animateViewport(to: panelSize.dimensions)
         }
         updateViewportHitAreas()
+        diagnostics.record(.floatingChanged, state: diagnosticState())
     }
 
     private func handleMagnify(_ event: NSEvent) -> Bool {
@@ -487,15 +505,36 @@ final class IslandNoteController: NSObject {
     }
 
     func handleMagnification(delta: CGFloat, phase: NSEvent.Phase, locationInWindow: NSPoint) -> Bool {
-        guard mode == .expanded, edgeResize == nil else { return false }
-        let visible = maskLayer.presentation()?.path?.boundingBoxOfPath ?? expandedRect
-        guard pinch.isActive || visible.contains(locationInWindow), dragInteraction.prepareForResize() else { return false }
+        diagnostics.record(.pinchReceived, state: diagnosticState(), delta: delta, phase: phase)
+        func reject(_ reason: InteractionDiagnosticReason) -> Bool {
+            diagnostics.record(reason, state: diagnosticState(), delta: delta, phase: phase)
+            if phase.contains(.ended) || phase.contains(.cancelled) { pinch.reset() }
+            return false
+        }
+        guard mode == .expanded else { return reject(.panelClosed) }
+        guard edgeResize == nil else { return reject(.edgeResizing) }
+        guard !dragInteraction.isDragging else { return reject(.headerDragging) }
+        // The editor is already visible while its opening contour is still animating.
+        // Accept gestures on the editor, rather than only the smaller presentation mask.
+        guard pinch.isActive || expandedRect.contains(locationInWindow) else { return reject(.outsidePanel) }
+        if phase.contains(.began), pinch.isActive { diagnostics.record(.gestureInterrupted, state: diagnosticState()) }
+        if !dragInteraction.isDocking { _ = dragInteraction.prepareForResize() }
         pendingCollapse?.cancel()
         pendingCollapse = nil
-        let current: PanelSize? = dragInteraction.isFloating
+        let current: PanelSize? = pendingPinchSize ?? (dragInteraction.isFloating && !dragInteraction.isDocking
             ? [PanelSize.standard, .large].first { $0.floatingDimensions == floatingSize }
-            : panelSize
-        if let target = pinch.update(delta: delta, phase: phase, size: current) { resize(to: target) }
+            : panelSize)
+        let evaluation = pinch.evaluate(delta: delta, phase: phase, size: current)
+        if evaluation != .alreadyCommitted, evaluation != .waiting || phase.contains(.ended) {
+            diagnostics.record(evaluation.reason, state: diagnosticState(), delta: delta, phase: phase)
+        }
+        if case let .resize(target) = evaluation {
+            if dragInteraction.isDocking {
+                pendingPinchSize = target
+                diagnostics.record(.resizeQueued, state: diagnosticState())
+            } else { resize(to: target) }
+        }
+        if phase.contains(.ended) || phase.contains(.cancelled) { diagnostics.record(.gestureFinished, state: diagnosticState()) }
         return true
     }
 
@@ -507,11 +546,11 @@ final class IslandNoteController: NSObject {
             let requested = isPreset ? size.floatingDimensions
                 : NSSize(width: current.width * scale, height: current.height * scale)
             let target = FloatingPanelLayout.clamped(requested, maximum: floatingMaximum())
-            guard target != expandedRect.size else { return }
+            guard target != expandedRect.size else { diagnostics.record(.sizeLimit, state: diagnosticState()); return }
             floatingSize = target
             animateViewport(to: target)
         } else {
-            guard size != panelSize else { return }
+            guard size != panelSize else { diagnostics.record(.presetLimit, state: diagnosticState()); return }
             panelSize = size
             animateViewport(to: size.dimensions)
         }
@@ -519,7 +558,11 @@ final class IslandNoteController: NSObject {
         logger.info("Panel size target: \(self.targetViewportSize?.width ?? self.expandedRect.width, privacy: .public) x \(self.targetViewportSize?.height ?? self.expandedRect.height, privacy: .public)")
     }
 
-    private func stopViewportAnimation() {
+    private func stopViewportAnimation(completed: Bool = false) {
+        if let target = targetViewportSize {
+            let reached = abs(target.width - expandedRect.width) < 0.5 && abs(target.height - expandedRect.height) < 0.5
+            diagnostics.record(completed ? (reached ? .resizeCompleted : .resizeStalled) : .resizeInterrupted, state: diagnosticState())
+        }
         resizeTimer?.invalidate()
         resizeTimer = nil
         targetViewportSize = nil
@@ -533,7 +576,7 @@ final class IslandNoteController: NSObject {
         let start = expandedRect.size
         targetViewportSize = target
         let duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.32
-        if duration == 0 { applyViewport(size: target); targetViewportSize = nil; return }
+        if duration == 0 { applyViewport(size: target); stopViewportAnimation(completed: true); return }
         let began = ProcessInfo.processInfo.systemUptime
         let timer = Timer(timeInterval: 1 / Double(max(60, panel.screen?.maximumFramesPerSecond ?? 60)), repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -542,7 +585,7 @@ final class IslandNoteController: NSObject {
                 let eased = CGFloat(t * t * (3 - 2 * t))
                 self.applyViewport(size: NSSize(width: start.width + (target.width - start.width) * eased,
                                                 height: start.height + (target.height - start.height) * eased))
-                if t >= 1 { self.stopViewportAnimation() }
+                if t >= 1 { self.stopViewportAnimation(completed: true) }
             }
         }
         resizeTimer = timer
@@ -581,6 +624,7 @@ final class IslandNoteController: NSObject {
         edgeResize = EdgeResize(edges: edges, mouse: mouse, rect: screenRect(expandedRect),
                                 maximum: floatingMaximum(screen: screen), screen: screen.visibleFrame)
         logger.info("Floating edge resize began")
+        diagnostics.record(.edgeResizeBegan, state: diagnosticState())
     }
 
     func moveEdgeResize(to mouse: NSPoint) {
@@ -599,6 +643,7 @@ final class IslandNoteController: NSObject {
         guard edgeResize != nil else { return }
         edgeResize = nil
         logger.info("Floating size: \(self.expandedRect.width, privacy: .public) x \(self.expandedRect.height, privacy: .public)")
+        diagnostics.record(.edgeResizeEnded, state: diagnosticState())
     }
 
     // MARK: - 悬停 / 点击
@@ -656,12 +701,29 @@ final class IslandNoteController: NSObject {
     }
 
     private func handleRightClick(_ e: NSEvent?) {
-        let loc = NSEvent.mouseLocation
+        let loc = screenPoint(for: e)
         let inIsland = screenRect(rect(for: mode)).insetBy(dx: -12, dy: -12).contains(loc)
             || screenRect(restRect).insetBy(dx: -12, dy: -12).contains(loc)
         guard inIsland else { return }
 
         let menu = NSMenu()
+        let diagnosticsItem = NSMenuItem(title: "开发者诊断（本机）", action: nil, keyEquivalent: "")
+        let diagnosticsMenu = NSMenu()
+        diagnosticsMenu.autoenablesItems = false
+        let toggle = NSMenuItem(title: "自动收集交互诊断", action: #selector(toggleDiagnostics), keyEquivalent: "")
+        toggle.state = diagnostics.isEnabled ? .on : .off
+        toggle.target = self
+        diagnosticsMenu.addItem(toggle)
+        let mark = NSMenuItem(title: "记录刚才的交互异常", action: #selector(markInteractionProblem), keyEquivalent: "")
+        mark.target = self
+        mark.isEnabled = diagnostics.isEnabled
+        diagnosticsMenu.addItem(mark)
+        let report = NSMenuItem(title: "查看诊断报告…", action: #selector(showDiagnostics), keyEquivalent: "")
+        report.target = self
+        diagnosticsMenu.addItem(report)
+        diagnosticsItem.submenu = diagnosticsMenu
+        menu.addItem(diagnosticsItem)
+        menu.addItem(.separator())
         #if !ISLAND_TESTFLIGHT
         let syncItem = NSMenuItem(title: "Flomo Sync…", action: #selector(showSyncSettings), keyEquivalent: "")
         syncItem.target = self
@@ -681,6 +743,44 @@ final class IslandNoteController: NSObject {
     }
 
     @objc private func collapseAction() { collapse() }
+    private func diagnosticState() -> InteractionDiagnosticState {
+        let screen = (panel.screen ?? notchScreen()).visibleFrame
+        return InteractionDiagnosticState(mode: String(describing: mode), floating: dragInteraction.isFloating,
+            dragging: dragInteraction.isDragging, docking: dragInteraction.isDocking, edgeResizing: edgeResize != nil,
+            animating: resizeTimer != nil, panelKey: panel.isKeyWindow, appActive: NSApp.isActive,
+            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+            width: expandedRect.width, height: expandedRect.height,
+            targetWidth: targetViewportSize.map { Double($0.width) }, targetHeight: targetViewportSize.map { Double($0.height) },
+            screenWidth: screen.width, screenHeight: screen.height)
+    }
+
+    @objc func toggleDiagnostics() {
+        diagnostics.setEnabled(!diagnostics.isEnabled, state: diagnosticState())
+    }
+
+    @objc func markInteractionProblem() {
+        diagnostics.markProblem(state: diagnosticState())
+        showDiagnostics()
+    }
+
+    @objc func showDiagnostics() {
+        diagnostics.reloadHistoryIfEmpty()
+        diagnostics.flush()
+        pendingCollapse?.cancel(); pendingCollapse = nil
+        showingSyncSettings = true
+        defer { showingSyncSettings = false }
+        let alert = NSAlert()
+        alert.messageText = "本机交互诊断"
+        let findings = diagnostics.recentFindings
+        alert.informativeText = "\(diagnostics.isEnabled ? "正在收集" : "已关闭收集")。只记录面板尺寸、手势阶段和交互状态，不记录笔记正文或截图，也不上传。关闭后保留已有记录。\n\n\(findings.isEmpty ? "尚无交互记录。开启后重现问题即可自动记录。" : findings)"
+        alert.addButton(withTitle: "完成")
+        let open = alert.addButton(withTitle: "打开报告目录")
+        open.isEnabled = diagnostics.reportURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertSecondButtonReturn, let url = diagnostics.reportURL {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        }
+    }
     @objc private func quitAction() {
         NSApp.terminate(nil)
     }
@@ -736,6 +836,7 @@ final class IslandNoteController: NSObject {
 
     func flushEditor() {
         editor.flushPending()
+        diagnostics.flush()
     }
 
     #if !ISLAND_TESTFLIGHT
@@ -790,6 +891,7 @@ final class IslandNoteController: NSObject {
         resizeHandles.isEnabled = false
         if m != .expanded { expandedRect = expandedFrame(for: panelSize) }
         pinch.reset()
+        pendingPinchSize = nil
         pendingCollapse?.cancel()
         pendingCollapse = nil
         mode = m

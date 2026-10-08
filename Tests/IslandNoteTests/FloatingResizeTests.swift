@@ -12,7 +12,8 @@ final class FloatingResizeTests: XCTestCase {
     private func settle(_ interval: TimeInterval = 0.45) {
         RunLoop.main.run(until: Date().addingTimeInterval(interval))
     }
-    private func withPanel(_ body: (IslandNoteController, IslandPanel, NoteEditorView, NSTextView) throws -> Void) throws {
+    private func withPanel(diagnostics: InteractionDiagnostics? = nil, openingDelay: TimeInterval = 1.1,
+                           _ body: (IslandNoteController, IslandPanel, NoteEditorView, NSTextView) throws -> Void) throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("island-resize-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -22,11 +23,11 @@ final class FloatingResizeTests: XCTestCase {
         let existing = Set(NSApp.windows.map(ObjectIdentifier.init))
         let previousMenu = NSApp.mainMenu
         defer { NSApp.mainMenu = previousMenu }
-        let controller = IslandNoteController(store: NoteStore(fileURL: note), enableSync: false)
+        let controller = IslandNoteController(store: NoteStore(fileURL: note), enableSync: false, diagnostics: diagnostics)
         let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? IslandPanel }.first { !existing.contains(ObjectIdentifier($0)) })
         defer { panel.close() }
         controller.expand()
-        settle(1.1)
+        settle(openingDelay)
         let editor = try XCTUnwrap(find(NoteEditorView.self, in: try XCTUnwrap(panel.contentView)))
         let text = try XCTUnwrap(find(NSTextView.self, in: editor))
         try body(controller, panel, editor, text)
@@ -164,6 +165,43 @@ final class FloatingResizeTests: XCTestCase {
             editor.dragHandle.onEnd?(moved)
             settle()
             XCTAssertEqual(editor.frame.size, PanelSize.standard.floatingDimensions)
+        }
+    }
+
+    func testPinchDuringDockingIsQueuedAndCompletesWithDiagnosticEvidence() throws {
+        let diagnostics = InteractionDiagnostics(defaults: nil, enabled: true)
+        try withPanel(diagnostics: diagnostics) { controller, panel, editor, _ in
+            let dockPoint = header(panel, editor)
+            let release = NSPoint(x: dockPoint.x + 80, y: dockPoint.y - 170)
+            editor.dragHandle.onBegin?(dockPoint)
+            editor.dragHandle.onMove?(release)
+            editor.dragHandle.onEnd?(release)
+            settle()
+            let returnStart = header(panel, editor)
+            editor.dragHandle.onBegin?(returnStart)
+            editor.dragHandle.onMove?(dockPoint)
+            editor.dragHandle.onEnd?(dockPoint)
+            pinch(controller, editor: editor, delta: 0.1)
+            XCTAssertTrue(diagnostics.events.contains { $0.reason == .resizeQueued && $0.state.docking })
+            settle(0.8)
+            XCTAssertEqual(panel.level, .screenSaver)
+            XCTAssertEqual(editor.frame.size, PanelSize.large.dimensions)
+            XCTAssertTrue(diagnostics.events.contains { $0.reason == .resizeCompleted && $0.state.width == 690 })
+            // An endpoint no-op and a rejected origin leave different evidence.
+            pinch(controller, editor: editor, delta: 0.1)
+            XCTAssertTrue(diagnostics.events.contains { $0.reason == .presetLimit })
+            XCTAssertFalse(controller.handleMagnification(delta: 0.1, phase: .began, locationInWindow: NSPoint(x: -1000, y: -1000)))
+            XCTAssertEqual(diagnostics.events.last?.reason, .outsidePanel)
+        }
+    }
+
+    func testPinchUsesEditorFootprintWhileOpeningContourIsAnimating() throws {
+        try withPanel(openingDelay: 0.03) { controller, _, editor, _ in
+            let location = NSPoint(x: editor.frame.midX, y: editor.frame.minY + 30)
+            XCTAssertTrue(controller.handleMagnification(delta: 0.1, phase: .began, locationInWindow: location))
+            XCTAssertTrue(controller.handleMagnification(delta: 0, phase: .ended, locationInWindow: location))
+            settle()
+            XCTAssertEqual(editor.frame.size, PanelSize.large.dimensions)
         }
     }
 }

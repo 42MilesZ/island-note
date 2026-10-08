@@ -20,6 +20,20 @@ enum PanelSize: String {
 
 /// Accumulate native magnification deltas and commit at most once per gesture.
 struct PanelPinch {
+    enum Evaluation: Equatable {
+        case waiting, alreadyCommitted, endpoint, cancelled, invalidDelta
+        case resize(PanelSize)
+        var reason: InteractionDiagnosticReason {
+            switch self {
+            case .waiting: return .belowThreshold
+            case .alreadyCommitted: return .gestureAlreadyHandled
+            case .endpoint: return .presetLimit
+            case .cancelled: return .gestureCancelled
+            case .invalidDelta: return .invalidGesture
+            case .resize: return .resizeRequested
+            }
+        }
+    }
     private(set) var isActive = false
     private var magnification: CGFloat = 0
     private var didCommit = false
@@ -27,14 +41,20 @@ struct PanelPinch {
     mutating func reset() { self = PanelPinch() }
 
     mutating func update(delta: CGFloat, phase: NSEvent.Phase, size: PanelSize?) -> PanelSize? {
+        if case let .resize(target) = evaluate(delta: delta, phase: phase, size: size) { return target }
+        return nil
+    }
+
+    mutating func evaluate(delta: CGFloat, phase: NSEvent.Phase, size: PanelSize?) -> Evaluation {
         if phase.contains(.began) { reset() }
         if phase.contains(.cancelled) {
             reset()
-            return nil
+            return .cancelled
         }
         isActive = true
         defer { if phase.contains(.ended) { reset() } }
-        guard !didCommit, delta.isFinite else { return nil }
+        guard delta.isFinite else { return .invalidDelta }
+        guard !didCommit else { return .alreadyCommitted }
         magnification += delta
         let target: PanelSize
         if magnification >= 0.08 {
@@ -42,11 +62,11 @@ struct PanelPinch {
         } else if magnification <= -0.08 {
             target = .standard
         } else {
-            return nil
+            return .waiting
         }
         // A gesture toward an existing endpoint is still consumed, so reversing
         // the fingers in the same gesture cannot accidentally toggle the size.
         didCommit = true
-        return target == size ? nil : target
+        return target == size ? .endpoint : .resize(target)
     }
 }

@@ -70,6 +70,8 @@ final class PanelDragCoordinator {
     private(set) var isFloating = false
 
     var isInteracting: Bool { drag != nil || flight != nil }
+    var isDocking: Bool { flight?.dock == true }
+    var isDragging: Bool { drag != nil }
     var preventsCollapse: Bool { isFloating || isInteracting }
     private var reducedMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
