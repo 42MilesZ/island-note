@@ -12,6 +12,7 @@ private final class NoteEditorModel: ObservableObject {
     @Published var localeRevision = 0
     @Published var text = ""
     @Published var isEditable = false
+    @Published var documentID = UUID().uuidString
 }
 
 private struct MarkdownEditorHost: View {
@@ -48,10 +49,12 @@ private struct MarkdownEditorHost: View {
     }()
 
     var body: some View {
-        NativeTextViewWrapper(
+        let identity = model.documentID
+        return NativeTextViewWrapper(
             text: Binding(
                 get: { model.text },
                 set: { newText in
+                    guard model.documentID == identity else { return }
                     if DocumentLimits.count(newText) > DocumentLimits.limit,
                        DocumentLimits.count(newText) >= DocumentLimits.count(model.text) {
                         // Also catches smart-input expansions and edits that bypass
@@ -68,7 +71,7 @@ private struct MarkdownEditorHost: View {
             ),
             configuration: Self.configuration,
             fontSize: 14,
-            documentId: "island-note",
+            documentId: identity,
             isEditable: model.isEditable,
             onBuildContextMenu: onBuildContextMenu,
             placeholder: NSAttributedString(
@@ -79,6 +82,7 @@ private struct MarkdownEditorHost: View {
                 ]
             )
         )
+        .id(identity)
     }
 }
 
@@ -127,6 +131,15 @@ final class NoteEditorView: NSView {
 
     func setEditingEnabled(_ enabled: Bool) {
         model.isEditable = enabled
+    }
+
+    /// A new native editor owns its undo stack; queued bindings from the old
+    /// document are rejected so they cannot save into the newly selected file.
+    func openDocument(_ text: String) {
+        model.documentID = UUID().uuidString
+        string = text
+        localSaveError = nil
+        showSyncStatus(.disconnected, detail: L10n.tr("Flomo not connected"))
     }
 
     override init(frame frameRect: NSRect) {

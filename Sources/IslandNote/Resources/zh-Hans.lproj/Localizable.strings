@@ -229,3 +229,14 @@
 "Flomo extension is off. Local notes and the previous sync preference are retained." = "Flomo 扩展已关闭，本机笔记和此前的同步设置已保留。";
 "Flomo was stopped before sending the note. No write was issued." = "发送笔记前 Flomo 已停用，未执行写入。";
 "(No text preview)" = "（暂无文字预览）";
+
+// Note file selection and connection recovery
+"Note File" = "笔记文件";
+"Open Existing File…" = "打开已有文件…";
+"Change Save Location…" = "更改保存位置…";
+"Choose where this note saves, or edit an existing Markdown file. The previous file is kept. Each file keeps its own Flomo connection." = "指定保存位置，或打开已有的 Markdown 文件继续编辑。原文件会保留，每个文件分别保存自己的 Flomo 绑定。";
+"Restore Previous Flomo Connection…" = "恢复旧版 Flomo 连接…";
+"First open your original note file. Then choose the old IslandNote folder in Library/Application Support. Its connection will be restored paused so you can review before resuming." = "先打开原有笔记文件，再选择 Library/Application Support 中旧版的 IslandNote 文件夹。连接将以暂停状态恢复，核对后再继续同步。";
+"Note file could not be changed" = "无法切换笔记文件";
+"Wait for the current sync to finish, then switch files." = "请等待当前同步完成后再切换文件。";
+"Finish composing your text before switching files." = "请先完成当前文字输入，再切换文件。";

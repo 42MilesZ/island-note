@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// The one local Markdown document edited by Island Note.
 /// Writes are debounced while typing and flushed before the editor closes.
@@ -17,12 +18,15 @@ final class NoteStore {
         }
     }
 
-    let fileURL: URL
+    private(set) var fileURL: URL
+    let configurationDirectory: URL
     private var lastLoadedContent: String?
     private var pending: String?
     private var saveWork: DispatchWorkItem?
-    private let configurationError: Error?
-    private let usesManagedFile: Bool
+    private var configurationError: Error?
+    private var usesManagedFile: Bool
+    private var scopedURL: URL?
+    private var legacyDocumentPath: String?
     private let debounceInterval: TimeInterval = 0.18
     private(set) var lastErrorMessage: String?
 
@@ -31,21 +35,32 @@ final class NoteStore {
     var onSaveError: ((String) -> Void)?
 
     init(fileURL: URL? = nil, configurationDirectory: URL? = nil) {
+        let directory = configurationDirectory ?? Self.defaultDirectory
+        self.configurationDirectory = directory
         if let fileURL {
             self.fileURL = fileURL
             configurationError = nil
             usesManagedFile = false
+            legacyDocumentPath = fileURL.standardizedFileURL.resolvingSymlinksInPath().path
             return
         }
-        let directory = configurationDirectory ?? Self.defaultDirectory
-
         let settings = directory.appendingPathComponent("settings.json")
         let managed = directory.appendingPathComponent("Island Note.md")
         do {
             if FileManager.default.fileExists(atPath: settings.path) {
                 let config = try JSONDecoder().decode(NoteConfiguration.self, from: Data(contentsOf: settings))
                 guard config.notePath.hasPrefix("/") else { throw CocoaError(.fileReadInvalidFileName) }
-                self.fileURL = URL(fileURLWithPath: config.notePath)
+                if let bookmark = config.bookmark {
+                    var stale = false
+                    let resolved = try URL(resolvingBookmarkData: bookmark, options: [.withSecurityScope],
+                                           relativeTo: nil, bookmarkDataIsStale: &stale)
+                    self.fileURL = resolved
+                    if resolved.startAccessingSecurityScopedResource() { scopedURL = resolved }
+                    if stale {
+                        let refreshed = try resolved.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+                        try Self.writeConfiguration(NoteConfiguration(notePath: resolved.path, bookmark: refreshed), directory: directory)
+                    }
+                } else { self.fileURL = URL(fileURLWithPath: config.notePath) }
                 usesManagedFile = false
             } else {
                 self.fileURL = managed
@@ -53,10 +68,136 @@ final class NoteStore {
             }
             configurationError = nil
         } catch {
+            scopedURL?.stopAccessingSecurityScopedResource()
+            scopedURL = nil
             self.fileURL = managed
             usesManagedFile = false
             configurationError = error
         }
+        if configurationError == nil { legacyDocumentPath = self.fileURL.standardizedFileURL.resolvingSymlinksInPath().path }
+    }
+
+    deinit { scopedURL?.stopAccessingSecurityScopedResource() }
+
+    private static func writeConfiguration(_ configuration: NoteConfiguration, directory: URL) throws {
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("settings.json")
+        try JSONEncoder().encode(configuration).write(to: url, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    /// Validate and save the selection before releasing the previous document's access.
+    /// An open failure keeps the current document and its pending text intact.
+    func openExisting(_ url: URL) throws -> String {
+        guard pending == nil || flushSync() else { throw SaveError.documentNotLoaded }
+        let accessed = url.startAccessingSecurityScopedResource()
+        var committed = false
+        defer { if accessed && !committed { url.stopAccessingSecurityScopedResource() } }
+        let text = try String(contentsOf: url, encoding: .utf8)
+        #if ISLAND_APP_STORE || ISLAND_TESTFLIGHT
+        let bookmark = try url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+        #else
+        let bookmark: Data? = nil
+        #endif
+        try Self.writeConfiguration(NoteConfiguration(notePath: url.path, bookmark: bookmark), directory: configurationDirectory)
+        scopedURL?.stopAccessingSecurityScopedResource()
+        scopedURL = accessed ? url : nil
+        committed = true
+        fileURL = url
+        usesManagedFile = false
+        configurationError = nil
+        lastLoadedContent = text
+        lastErrorMessage = nil
+        return text
+    }
+
+    /// Save a new copy and switch to it. Never truncate an existing destination.
+    func saveCopyAndSwitch(to url: URL) throws -> String {
+        guard flushSync(), let text = lastLoadedContent else { throw SaveError.documentNotLoaded }
+        try prepareSyncState()
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        let destinationState = syncStateURL(for: url)
+        let previousState = syncStateURL
+        let previousData = try FileManager.default.fileExists(atPath: previousState.path) ? Data(contentsOf: previousState) : nil
+        // A save-location change keeps this logical note's connection. A stale
+        // destination connection must never silently replace or redirect it.
+        guard !FileManager.default.fileExists(atPath: destinationState.path) else { throw CocoaError(.fileWriteFileExists) }
+        try Data(text.utf8).write(to: url, options: .withoutOverwriting)
+        var destinationCreated = false
+        do {
+            if let previousData {
+                // Pause first: interruption must never leave two active writers.
+                var paused = try JSONDecoder().decode(SyncRecord.self, from: previousData)
+                paused.enabled = false
+                try JSONEncoder().encode(paused).write(to: previousState, options: .atomic)
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: previousState.path)
+                try FileManager.default.createDirectory(at: destinationState.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try previousData.write(to: destinationState, options: .withoutOverwriting)
+                destinationCreated = true
+                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destinationState.path)
+            }
+            return try openExisting(url)
+        } catch {
+            // Selection persistence failed: retain the old connection and leave
+            // the new Markdown copy intact, without a second active connection.
+            if let previousData {
+                if destinationCreated { try FileManager.default.removeItem(at: destinationState) }
+                try previousData.write(to: previousState, options: .atomic)
+            }
+            throw error
+        }
+    }
+
+    var syncStateURL: URL { syncStateURL(for: fileURL) }
+
+    private func syncStateURL(for url: URL) -> URL {
+        let key = SHA256.hash(data: Data(url.standardizedFileURL.resolvingSymlinksInPath().path.utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        return configurationDirectory.appendingPathComponent("Documents/" + key, isDirectory: true)
+            .appendingPathComponent("flomo-sync.json")
+    }
+
+    /// Associate a legacy global connection with exactly its original document.
+    /// Keep the original record as a recovery copy; never import it into later files.
+    func prepareSyncState() throws {
+        let legacy = configurationDirectory.appendingPathComponent("flomo-sync.json")
+        guard FileManager.default.fileExists(atPath: legacy.path) else { return }
+        let marker = configurationDirectory.appendingPathComponent("legacy-sync-document.json")
+        let identity = fileURL.standardizedFileURL.resolvingSymlinksInPath().path
+        if FileManager.default.fileExists(atPath: marker.path) {
+            let original = try JSONDecoder().decode(NoteConfiguration.self, from: Data(contentsOf: marker))
+            guard original.notePath == identity else { return }
+        } else {
+            guard legacyDocumentPath == identity else { return }
+            _ = try JSONDecoder().decode(SyncRecord.self, from: Data(contentsOf: legacy))
+            try JSONEncoder().encode(NoteConfiguration(notePath: identity, bookmark: nil)).write(to: marker, options: .withoutOverwriting)
+        }
+        if !FileManager.default.fileExists(atPath: syncStateURL.path) {
+            try FileManager.default.createDirectory(at: syncStateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: legacy, to: syncStateURL)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: syncStateURL.path)
+        }
+    }
+
+    /// The selected old settings directory must name the currently open note.
+    /// Import paused so the user can review before any network operation.
+    func importPreviousConnection(from directory: URL) throws {
+        let settings = directory.appendingPathComponent("settings.json")
+        let previousNote: URL
+        if FileManager.default.fileExists(atPath: settings.path) {
+            let configuration = try JSONDecoder().decode(NoteConfiguration.self, from: Data(contentsOf: settings))
+            previousNote = URL(fileURLWithPath: configuration.notePath)
+        } else { previousNote = directory.appendingPathComponent("Island Note.md") }
+        guard previousNote.standardizedFileURL.resolvingSymlinksInPath() == fileURL.standardizedFileURL.resolvingSymlinksInPath() else {
+            throw CocoaError(.fileReadInvalidFileName)
+        }
+        var record = try JSONDecoder().decode(SyncRecord.self, from: Data(contentsOf: directory.appendingPathComponent("flomo-sync.json")))
+        guard record.memoID != nil || record.creationUncertain || record.pendingWrite != nil else { throw CocoaError(.fileReadCorruptFile) }
+        record.enabled = false
+        try FileManager.default.createDirectory(at: syncStateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(record).write(to: syncStateURL, options: .withoutOverwriting)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: syncStateURL.path)
     }
 
     static var defaultDirectory: URL {
@@ -158,6 +299,7 @@ final class NoteStore {
     }
 }
 
-private struct NoteConfiguration: Decodable {
+private struct NoteConfiguration: Codable {
     let notePath: String
+    let bookmark: Data?
 }

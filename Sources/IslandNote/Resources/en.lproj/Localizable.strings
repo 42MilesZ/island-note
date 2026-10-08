@@ -229,3 +229,14 @@
 "Flomo extension is off. Local notes and the previous sync preference are retained." = "Flomo extension is off. Local notes and the previous sync preference are retained.";
 "Flomo was stopped before sending the note. No write was issued." = "Flomo was stopped before sending the note. No write was issued.";
 "(No text preview)" = "(No text preview)";
+
+// Note file selection and connection recovery
+"Note File" = "Note File";
+"Open Existing File…" = "Open Existing File…";
+"Change Save Location…" = "Change Save Location…";
+"Choose where this note saves, or edit an existing Markdown file. The previous file is kept. Each file keeps its own Flomo connection." = "Choose where this note saves, or edit an existing Markdown file. The previous file is kept. Each file keeps its own Flomo connection.";
+"Restore Previous Flomo Connection…" = "Restore Previous Flomo Connection…";
+"First open your original note file. Then choose the old IslandNote folder in Library/Application Support. Its connection will be restored paused so you can review before resuming." = "First open your original note file. Then choose the old IslandNote folder in Library/Application Support. Its connection will be restored paused so you can review before resuming.";
+"Note file could not be changed" = "Note file could not be changed";
+"Wait for the current sync to finish, then switch files." = "Wait for the current sync to finish, then switch files.";
+"Finish composing your text before switching files." = "Finish composing your text before switching files.";

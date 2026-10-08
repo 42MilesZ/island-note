@@ -16,7 +16,7 @@ Pinches received during a return to the island accumulate continuously against t
 
 Open **Settings…** from the island or editor's context menu, or press **⌘,**.
 The panel retracts while settings or the policy is open so its floating level cannot hide those windows.
-Flomo and local diagnostics are independent opt-in features, both off by default.
+Flomo and local diagnostics are independent opt-in features, both off by default on a new install. Direct-distribution updates preserve an existing Flomo connection and its paused/syncing preference when no explicit extension choice was saved.
 The interface follows the system language, using Simplified Chinese for Chinese and English otherwise.
 There is no in-app language selector; previous overrides are ignored.
 **Privacy Policy** shows the complete policy bundled with the app, including while offline.
@@ -41,6 +41,14 @@ make run
 ```
 
 `make package` builds a fresh signed `IslandNote.app` without opening it, with an application icon and version metadata. Previous bundles are kept recoverable under the ignored `.build/` directory.
+
+## Note file
+
+Settings shows the active note path. **Open Existing File…** switches to an existing UTF-8 Markdown or plain-text file. **Change Save Location…** saves the current content to a new location and selects that copy; the previous file is retained, the current Flomo connection follows the note (the old copy's connection is paused), and existing destinations are never overwritten. Pending edits flush before switching; save conflicts or unreadable selections keep the active file. Each selection starts a separate native editor undo history.
+
+The sandboxed app stores a security-scoped bookmark for user-selected files, maintaining access across launches. Flomo records are stored per canonical document path under `IslandNote/Documents/<SHA256>/flomo-sync.json`. The original global record is copied once to the original file's record and retained as recovery data; switching to a different file never inherits it. Reopening a previously connected file restores its own connection.
+
+To move from direct distribution to the sandboxed app, first open the original note, then choose **Restore Previous Flomo Connection…** and select the old `Library/Application Support/IslandNote` directory. Import validates that the connection belongs to the currently selected file, retains interrupted write/create intents, and starts paused. Existing destination records are not replaced. Review the connection in Flomo settings before resuming. The personal token remains in Keychain.
 
 ## Flomo sync
 
@@ -99,16 +107,16 @@ Built with Swift, AppKit, and [SwiftMarkdownEngine](https://github.com/nodes-app
 universal Apple Silicon / Intel app, exports using App Store Connect signing,
 validates the package, then uploads it. XcodeGen and Xcode 26 are required.
 `ASC_KEY_ID` and `ASC_ISSUER_ID` come from the shell environment; the private key
-stays in `~/.appstoreconnect/private_keys/`. Build `3` was previously uploaded. The current release version is `1.0`, with default build `4`. Set `BUILD_NUMBER` to a new increasing integer
+stays in `~/.appstoreconnect/private_keys/`. Build `3` was previously uploaded. The current release version is `1.0`, with default build `5`. Set `BUILD_NUMBER` to a new increasing integer
 for subsequent uploads. An App Store Connect app record
 for `local.projects.island-note` must exist before uploading.
 
 This target defines `ISLAND_APP_STORE`, enables App Sandbox and includes the same optional
 Flomo functionality as direct distribution. Outgoing network access supports the optional
-Flomo connection; selected-file read/write access supports explicit diagnostic exports.
+Flomo connection; selected-file read/write access supports selected notes and explicit diagnostic exports. App-scoped bookmarks preserve selected-note access after relaunch.
 Default startup does not read a Flomo token or initialize synchronization while its switch is off.
 Notes are stored under the sandbox container's Application Support directory; existing unsandboxed
-notes and sync configuration are not imported. Keychain is used for the personal token after opt-in.
+notes and sync configuration are not automatically imported; Settings provides explicit file selection and previous-connection recovery. Keychain is used for the personal token after opt-in.
 The privacy manifest declares the app's own preferences and elapsed-time API use, and optional
 user-content/search-history transfer for sync functionality, without tracking.
 

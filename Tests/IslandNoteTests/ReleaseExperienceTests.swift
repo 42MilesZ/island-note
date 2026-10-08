@@ -19,6 +19,57 @@ final class ReleaseExperienceTests: XCTestCase {
         XCTAssertFalse(defaults.bool(forKey: InteractionDiagnostics.preferenceKey))
     }
 
+    func testLegacyFlomoConnectionRestoresExtensionWithoutOverridingExplicitOff() throws {
+        let suite = "island-migration-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        defer { defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: url) }
+        try JSONEncoder().encode(SyncRecord(enabled: false, memoID: "previous")).write(to: url)
+        XCTAssertTrue(AppPreferences(defaults: defaults, legacyStateURL: url).flomoEnabled)
+        defaults.set(false, forKey: AppPreferences.flomoKey)
+        XCTAssertFalse(AppPreferences(defaults: defaults, legacyStateURL: url).flomoEnabled)
+    }
+
+    func testSwitchingFilesCannotUndoOldEditsIntoNewDocument() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("island-undo-" + UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = directory.appendingPathComponent("first.md"), second = directory.appendingPathComponent("second.md")
+        try "Alpha".write(to: first, atomically: true, encoding: .utf8)
+        try "Beta stays intact".write(to: second, atomically: true, encoding: .utf8)
+        let store = NoteStore(fileURL: first, configurationDirectory: directory)
+        let editor = NoteEditorView(frame: NSRect(x: 0, y: 0, width: 460, height: 275))
+        let window = NSPanel(contentRect: editor.frame, styleMask: [.titled], backing: .buffered, defer: false)
+        window.contentView = editor
+        defer { window.close() }
+        editor.string = try store.load()
+        editor.onTextChanged = { store.save($0) }
+        editor.setEditingEnabled(true)
+        window.makeKeyAndOrderFront(nil)
+        func findText(_ view: NSView) -> NSTextView? { (view as? NSTextView) ?? view.subviews.compactMap(findText).first }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.15))
+        let oldEditor = try XCTUnwrap(findText(editor))
+        oldEditor.insertText(" change", replacementRange: NSRange(location: oldEditor.string.utf16.count, length: 0))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.25))
+        XCTAssertEqual(editor.string, "Alpha change")
+        XCTAssertTrue(store.flushSync())
+        let oldUndo = try XCTUnwrap(oldEditor.undoManager)
+        XCTAssertTrue(oldUndo.canUndo)
+        editor.openDocument(try store.openExisting(second))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        let newEditor = try XCTUnwrap(findText(editor))
+        XCTAssertFalse(oldEditor === newEditor)
+        XCTAssertFalse(newEditor.undoManager?.canUndo ?? true)
+        // Even a delayed action still referencing the old native editor is ignored.
+        oldUndo.undo()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        editor.flushPending()
+        XCTAssertTrue(store.flushSync())
+        XCTAssertEqual(editor.string, "Beta stays intact")
+        XCTAssertEqual(try String(contentsOf: second), "Beta stays intact")
+        XCTAssertEqual(try String(contentsOf: first), "Alpha change")
+    }
+
     func testBothLanguagesIncludePolicyAndNestedMenuTranslations() throws {
         let original = L10n.language
         defer { L10n.language = original }

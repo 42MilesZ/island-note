@@ -27,7 +27,7 @@ cp Resources/ThirdPartyNotices.txt "$app/Contents/Resources/"
 cp Resources/PrivacyInfo.xcprivacy "$app/Contents/Resources/"
 cp Resources/Info.plist "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${APP_VERSION:-1.0}" "$app/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER:-4}" "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER:-5}" "$app/Contents/Info.plist"
 swift scripts/make-icon.swift .build/AppIcon.iconset
 iconutil -c icns .build/AppIcon.iconset -o "$app/Contents/Resources/AppIcon.icns"
 if [[ "$identity" == "-" ]]; then

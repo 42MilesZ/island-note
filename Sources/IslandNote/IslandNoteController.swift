@@ -1,4 +1,5 @@
 import AppKit
+import UniformTypeIdentifiers
 import OSLog
 
 /// 命中放行：只在当前可见形状内接管点击，其余穿透到下方（菜单栏照常可点）。
@@ -891,13 +892,95 @@ final class IslandNoteController: NSObject {
             settings.onClearDiagnostics = { [weak self] in self?.diagnostics.clear() }
             settings.onPrivacy = { [weak self] in self?.showPrivacyPolicy() }
             settings.onClose = { [weak self] in self?.showingSyncSettings = false }
+            settings.onOpenNote = { [weak self] in self?.chooseNoteFile(saveCopy: false) }
+            settings.onSaveNoteAs = { [weak self] in self?.chooseNoteFile(saveCopy: true) }
+            settings.onImportConnection = { [weak self] in self?.importPreviousConnection() }
             settingsWindow = settings
         }
         showingSyncSettings = true
+        settingsWindow?.notePath = store.path
         settingsWindow?.rebuild()
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.showWindow(nil)
         settingsWindow?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    private func chooseNoteFile(saveCopy: Bool) {
+        guard !editor.hasMarkedText else { showFileError(L10n.tr("Finish composing your text before switching files.")); return }
+        let picker: NSSavePanel
+        if saveCopy {
+            picker = NSSavePanel()
+            picker.title = L10n.tr("Change Save Location…")
+            picker.nameFieldStringValue = store.fileURL.lastPathComponent
+        } else {
+            let open = NSOpenPanel()
+            open.canChooseFiles = true
+            open.canChooseDirectories = false
+            open.allowsMultipleSelection = false
+            open.title = L10n.tr("Open Existing File…")
+            picker = open
+        }
+        picker.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText, .plainText]
+        picker.allowsOtherFileTypes = false
+        picker.directoryURL = store.fileURL.deletingLastPathComponent()
+        guard picker.runModal() == .OK, let url = picker.url else { return }
+        // Native editor changes publish on the next main-queue turn.
+        DispatchQueue.main.async { [weak self] in self?.switchNote(to: url, saveCopy: saveCopy) }
+    }
+
+    private func switchNote(to url: URL, saveCopy: Bool) {
+        guard sync?.isBusy != true else { showFileError(L10n.tr("Wait for the current sync to finish, then switch files.")); return }
+        editor.flushPending()
+        guard store.flushSync() else { return }
+        do {
+            try store.prepareSyncState()
+            sync?.stop()
+            let text = try saveCopy ? store.saveCopyAndSwitch(to: url) : store.openExisting(url)
+            sync = nil
+            store.onSyncNeeded = nil
+            editor.openDocument(text)
+            editor.setEditingEnabled(true)
+            editor.setFlomoEnabled(preferences.flomoEnabled)
+            if preferences.flomoEnabled { setupSync() }
+            settingsWindow?.notePath = store.path
+            settingsWindow?.rebuild()
+            logger.info("Note file selection completed")
+        } catch {
+            // The store commits its new path only after validation and persistence.
+            sync?.stop(); sync = nil
+            store.onSyncNeeded = nil
+            if preferences.flomoEnabled { setupSync() }
+            showFileError(error.localizedDescription)
+        }
+    }
+
+    private func showFileError(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = L10n.tr("Note file could not be changed")
+        alert.informativeText = message
+        alert.runModal()
+    }
+
+    private func importPreviousConnection() {
+        guard sync?.isBusy != true else { showFileError(L10n.tr("Wait for the current sync to finish, then switch files.")); return }
+        let picker = NSOpenPanel()
+        picker.title = L10n.tr("Restore Previous Flomo Connection…")
+        picker.message = L10n.tr("First open your original note file. Then choose the old IslandNote folder in Library/Application Support. Its connection will be restored paused so you can review before resuming.")
+        picker.canChooseFiles = false
+        picker.canChooseDirectories = true
+        picker.allowsMultipleSelection = false
+        guard picker.runModal() == .OK, let directory = picker.url else { return }
+        let accessed = directory.startAccessingSecurityScopedResource()
+        defer { if accessed { directory.stopAccessingSecurityScopedResource() } }
+        do {
+            try store.importPreviousConnection(from: directory)
+            sync?.stop(); sync = nil
+            store.onSyncNeeded = nil
+            preferences.setFlomoEnabled(true)
+            editor.setFlomoEnabled(true)
+            setupSync()
+            showSyncSettings()
+        } catch { showFileError(error.localizedDescription) }
     }
 
     @discardableResult
@@ -1006,9 +1089,8 @@ final class IslandNoteController: NSObject {
                 else { editor.showSyncStatus(.disconnected, detail: L10n.tr("Connect your Flomo account in Settings.")) }
                 return
             }
-            let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
-                                                        appropriateFor: nil, create: true).appendingPathComponent("IslandNote")
-            let sync = try FlomoSync(stateURL: directory.appendingPathComponent("flomo-sync.json"))
+            try store.prepareSyncState()
+            let sync = try FlomoSync(stateURL: store.syncStateURL)
             self.sync = sync
             sync.onStatus = { [weak self] phase, detail in
                 guard let self, self.preferences.flomoEnabled else { return }

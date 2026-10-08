@@ -62,6 +62,7 @@ final class FlomoSync {
     private var timer: Timer?
     private var debounce: DispatchWorkItem?
     private var running = false
+    var isBusy: Bool { running }
     private var stopped = false
     private var rawStatus = "Flomo not connected"
     private var generation = UUID()

@@ -11,6 +11,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     var onClearDiagnostics: (() -> Void)?
     var onPrivacy: (() -> Void)?
     var onClose: (() -> Void)?
+    var notePath = ""
+    var onOpenNote: (() -> Void)?
+    var onSaveNoteAs: (() -> Void)?
+    var onImportConnection: (() -> Void)?
 
     init(preferences: AppPreferences, diagnostics: InteractionDiagnostics) {
         self.preferences = preferences
@@ -56,6 +60,20 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             stack.addArrangedSubview(line)
             line.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
+        label("Note File")
+        let path = NSTextField(wrappingLabelWithString: notePath)
+        path.isSelectable = true
+        path.font = .systemFont(ofSize: 12)
+        path.textColor = .secondaryLabelColor
+        path.setAccessibilityIdentifier("settings.notePath")
+        stack.addArrangedSubview(path)
+        path.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        let open = NSButton(title: L10n.tr("Open Existing File…"), target: self, action: #selector(openNote))
+        let saveAs = NSButton(title: L10n.tr("Change Save Location…"), target: self, action: #selector(saveNoteAs))
+        let files = NSStackView(views: [open, saveAs]); files.spacing = 12
+        stack.addArrangedSubview(files)
+        label("Choose where this note saves, or edit an existing Markdown file. The previous file is kept. Each file keeps its own Flomo connection.", detail: true)
+        separator()
         let flomo = NSButton(checkboxWithTitle: L10n.tr("Flomo Sync"), target: self, action: #selector(toggleFlomo(_:)))
         flomo.font = .systemFont(ofSize: 14, weight: .semibold)
         flomo.state = preferences.flomoEnabled ? .on : .off
@@ -65,6 +83,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let configure = NSButton(title: L10n.tr("Configure Flomo…"), target: self, action: #selector(configureFlomo))
         configure.isEnabled = preferences.flomoEnabled
         stack.addArrangedSubview(configure)
+        let restore = NSButton(title: L10n.tr("Restore Previous Flomo Connection…"), target: self, action: #selector(importConnection))
+        stack.addArrangedSubview(restore)
         separator()
         let diagnostic = NSButton(checkboxWithTitle: L10n.tr("Record Local Diagnostics"), target: self, action: #selector(toggleDiagnostics))
         diagnostic.font = .systemFont(ofSize: 14, weight: .semibold)
@@ -93,5 +113,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     @objc private func exportDiagnostics() { onExportDiagnostics?(); rebuild() }
     @objc private func clearDiagnostics() { onClearDiagnostics?(); rebuild() }
     @objc private func showPrivacy() { onPrivacy?() }
+    @objc private func openNote() { onOpenNote?(); rebuild() }
+    @objc private func saveNoteAs() { onSaveNoteAs?(); rebuild() }
+    @objc private func importConnection() { onImportConnection?(); rebuild() }
     func windowWillClose(_ notification: Notification) { onClose?() }
 }
