@@ -356,9 +356,26 @@ final class PanelDragCoordinator {
         shadow.shadowPath = path
     }
 
-    func recoverDisplay() {
+    /// A pinch may start immediately after mouse-up. Finish the release animation
+    /// before the resize spring takes ownership of the same mask and shadow.
+    func prepareForResize() -> Bool {
+        guard drag == nil, flight?.dock != true else { return false }
+        guard isFloating, flight != nil || transition != nil else { return true }
+        advance()
+        if let flight { panel.setFrameOrigin(flight.end) }
+        flight = nil
+        transition = nil
+        handSurface = nil
+        surface = Surface(floating: 1)
+        timer?.invalidate()
+        timer = nil
+        render()
+        return true
+    }
+
+    func recoverDisplay(rect: NSRect? = nil) {
         guard isFloating, !isInteracting, let screen = panel.screen ?? NSScreen.main else { return }
-        panel.setFrameOrigin(PanelDocking.constrainedOrigin(panel.frame.origin, rect: getRect(), screen: screen.visibleFrame))
+        panel.setFrameOrigin(PanelDocking.constrainedOrigin(panel.frame.origin, rect: rect ?? getRect(), screen: screen.visibleFrame))
     }
 
     func updateDock(anchorRect: NSRect, origin: NSPoint) {

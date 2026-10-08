@@ -128,14 +128,14 @@ final class IslandNoteController: NSObject {
     private var finishingCollapse = false
     private var monitors: [Any] = []
 
-    init(store: NoteStore) {
+    init(store: NoteStore, enableSync: Bool = true) {
         self.store = store
         super.init()
         installMainMenu()
         setup()
         bindStore()
         #if !ISLAND_TESTFLIGHT
-        setupSync()
+        if enableSync { setupSync() }
         #endif
     }
 
@@ -417,8 +417,7 @@ final class IslandNoteController: NSObject {
             return self.editor.handleKey(e)
         }
         let lm = NSEvent.addLocalMonitorForEvents(matching: .magnify) { [weak self] e in
-            guard let self, e.window === self.panel, self.mode == .expanded,
-                  !self.dragInteraction.isInteracting else { return e }
+            guard let self, e.window === self.panel, self.mode == .expanded else { return e }
             return self.handleMagnify(e) ? nil : e
         }
         monitors = [g, l, gc, lc, gr, lr, lk, lm].compactMap { $0 }
@@ -431,11 +430,16 @@ final class IslandNoteController: NSObject {
     }
 
     private func handleMagnify(_ event: NSEvent) -> Bool {
+        handleMagnification(delta: event.magnification, phase: event.phase, locationInWindow: event.locationInWindow)
+    }
+
+    func handleMagnification(delta: CGFloat, phase: NSEvent.Phase, locationInWindow: NSPoint) -> Bool {
+        guard mode == .expanded else { return false }
         let visible = maskLayer.presentation()?.path?.boundingBoxOfPath ?? expandedRect
-        guard pinch.isActive || visible.contains(event.locationInWindow) else { return false }
+        guard pinch.isActive || visible.contains(locationInWindow), dragInteraction.prepareForResize() else { return false }
         pendingCollapse?.cancel()
         pendingCollapse = nil
-        if let target = pinch.update(delta: event.magnification, phase: event.phase, size: panelSize) {
+        if let target = pinch.update(delta: delta, phase: phase, size: panelSize) {
             resize(to: target)
         }
         return true
@@ -479,11 +483,11 @@ final class IslandNoteController: NSObject {
         hitGate.hitRect = frame
         island.hitRect = frame
         dragInteraction.updateShadow(path: maskLayer.presentation()?.path ?? maskLayer.path!)
+        dragInteraction.recoverDisplay(rect: frame)
         CATransaction.commit()
         if finished {
             resizeTimer?.invalidate()
             resizeTimer = nil
-            dragInteraction.recoverDisplay()
         }
     }
 
