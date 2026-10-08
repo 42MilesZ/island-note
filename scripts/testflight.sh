@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 : "${ASC_ISSUER_ID:?ASC_ISSUER_ID is required}"
 key_path="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
 [[ -f "$key_path" ]] || { echo 'App Store Connect key is missing.' >&2; exit 1; }
-build_number="${BUILD_NUMBER:-5}"
+build_number="${BUILD_NUMBER:-6}"
 [[ "$build_number" =~ ^[1-9][0-9]{0,3}$ ]] || { echo 'BUILD_NUMBER must be an increasing integer from 1 to 9999.' >&2; exit 1; }
 archive_path="$PWD/.build/testflight/$build_number/IslandNote.xcarchive"
 export_path="$PWD/.build/testflight/$build_number/export"

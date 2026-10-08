@@ -180,7 +180,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     @objc private func importConnection() { onImportConnection?(); rebuild() }
     @objc private func flomoOptions(_ sender: NSButton) {
         let menu = NSMenu()
+        menu.autoenablesItems = false
         let restore = NSMenuItem(title: L10n.tr("Restore Previous Flomo Connection…"), action: #selector(importConnection), keyEquivalent: "")
+        restore.isEnabled = onImportConnection != nil
         restore.target = self; menu.addItem(restore)
         menu.popUp(positioning: nil, at: NSPoint(x: sender.bounds.minX, y: sender.bounds.minY - 4), in: sender)
     }
