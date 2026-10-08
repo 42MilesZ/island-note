@@ -37,6 +37,8 @@ final class PanelDragCoordinator {
     private struct Drag {
         let mouse: NSPoint
         let origin: NSPoint
+        let rectAtGrab: NSRect
+        var lastMouse: NSPoint
         let startedFloating: Bool
         let interruptedFlight: Bool
         let surfaceAtGrab: Surface
@@ -50,6 +52,8 @@ final class PanelDragCoordinator {
     private var dockOrigin: NSPoint
     private let getRect: () -> NSRect
     private let onDock: (Bool) -> Void
+    private let onFloatingChange: (Bool) -> Void
+    private let getTargetRect: () -> NSRect
     private let overlay: NSPanel
     private let anchor = CAShapeLayer()
     private let highlight = CAShapeLayer()
@@ -70,7 +74,8 @@ final class PanelDragCoordinator {
     private var reducedMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 
     init(panel: IslandPanel, mask: CAShapeLayer, shadow: CALayer, anchorRect: NSRect,
-         dockOrigin: NSPoint, getRect: @escaping () -> NSRect, onDock: @escaping (Bool) -> Void) {
+         dockOrigin: NSPoint, getRect: @escaping () -> NSRect, onDock: @escaping (Bool) -> Void,
+         getTargetRect: (() -> NSRect)? = nil, onFloatingChange: @escaping (Bool) -> Void = { _ in }) {
         self.panel = panel
         self.mask = mask
         self.shadow = shadow
@@ -78,6 +83,8 @@ final class PanelDragCoordinator {
         self.dockOrigin = dockOrigin
         self.getRect = getRect
         self.onDock = onDock
+        self.getTargetRect = getTargetRect ?? getRect
+        self.onFloatingChange = onFloatingChange
         let overlayRect = NSRect(x: anchorRect.midX - 450, y: anchorRect.maxY - 190, width: 900, height: 190)
         overlay = NSPanel(contentRect: overlayRect, styleMask: [.borderless, .nonactivatingPanel],
                           backing: .buffered, defer: false)
@@ -106,12 +113,13 @@ final class PanelDragCoordinator {
         flight = nil
         if wasFlying { transition = nil }
         wantsCollapse = false
-        drag = Drag(mouse: mouse, origin: panel.frame.origin, startedFloating: isFloating,
+        drag = Drag(mouse: mouse, origin: panel.frame.origin, rectAtGrab: getRect(), lastMouse: mouse, startedFloating: isFloating,
                     interruptedFlight: wasFlying, surfaceAtGrab: visibleSurface())
         preview = PanelDocking.isNearIsland(header: PanelDocking.headerContact(rect: screenRect(), island: anchorRect),
                                             island: anchorRect)
         if wasFlying { logger.debug("Docking interrupted by a new drag") }
         logger.debug("Panel header grabbed")
+        if isFloating { onFloatingChange(true) }
         // Taking hold never changes text focus or selection.
     }
 
@@ -120,15 +128,16 @@ final class PanelDragCoordinator {
         let distance = PanelDocking.distance(mouse, drag.mouse)
         guard drag.moved || distance >= PanelDocking.dragThreshold else { return }
         drag.moved = true
+        drag.lastMouse = mouse
         self.drag = drag
         if !isFloating, distance >= PanelDocking.separationDistance {
             isFloating = true
             panel.level = .floating
+            onFloatingChange(true)
             Haptics.detach()
             logger.info("Panel detached")
         }
-        let raw = NSPoint(x: drag.origin.x + mouse.x - drag.mouse.x,
-                          y: drag.origin.y + mouse.y - drag.mouse.y)
+        let raw = grabbedOrigin(drag, at: mouse)
         let rawRect = getRect().offsetBy(dx: raw.x, dy: raw.y)
         let header = PanelDocking.headerContact(rect: rawRect, island: anchorRect)
         let previousPreview = preview
@@ -178,7 +187,7 @@ final class PanelDragCoordinator {
             preview = false
             let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) })
                 ?? panel.screen ?? NSScreen.main
-            let origin = screen.map { PanelDocking.constrainedOrigin(panel.frame.origin, rect: getRect(), screen: $0.visibleFrame) }
+            let origin = screen.map { PanelDocking.constrainedOrigin(panel.frame.origin, rect: getTargetRect(), screen: $0.visibleFrame) }
                 ?? panel.frame.origin
             fly(to: origin, dock: false, collapse: false, haptic: false)
             animateSurface(to: Surface(floating: 1), duration: 0.26)
@@ -198,6 +207,7 @@ final class PanelDragCoordinator {
         preview = false
         overlay.orderFrontRegardless()
         fly(to: dockOrigin, dock: true, collapse: collapse, haptic: haptic)
+        onFloatingChange(false)
         animateSurface(to: Surface(connection: reducedMotion ? 0 : 1), duration: flight?.duration ?? 0)
         logger.info("Panel returning to island")
     }
@@ -277,6 +287,7 @@ final class PanelDragCoordinator {
                 if PanelDocking.distance(panel.frame.origin, flight.end) > 1 {
                     logger.error("Window did not reach its docking origin")
                     isFloating = true
+                    onFloatingChange(true)
                     animateSurface(to: Surface(floating: 1), duration: 0.18)
                     return
                 }
@@ -291,6 +302,8 @@ final class PanelDragCoordinator {
                 let collapse = flight.collapse || wantsCollapse
                 wantsCollapse = false
                 onDock(collapse)
+            } else {
+                recoverDisplay()
             }
         }
         if transition == nil, flight == nil {
@@ -354,6 +367,24 @@ final class PanelDragCoordinator {
     /// Resizing shares the existing outline animation, including the floating shadow.
     func updateShadow(path: CGPath) {
         shadow.shadowPath = path
+    }
+
+    /// Size morphing and live edge resizing feed the same contour/shadow renderer.
+    func viewportDidChange() {
+        if let drag, drag.moved { move(to: drag.lastMouse) }
+        else {
+            // A held floating header keeps its grip even before the drag threshold.
+            if let drag, isFloating { panel.setFrameOrigin(grabbedOrigin(drag, at: drag.lastMouse)) }
+            render()
+        }
+    }
+
+    private func grabbedOrigin(_ drag: Drag, at mouse: NSPoint) -> NSPoint {
+        let rect = getRect()
+        let grip = min(1, max(0, (drag.mouse.x - drag.origin.x - drag.rectAtGrab.minX) / drag.rectAtGrab.width))
+        return NSPoint(x: drag.origin.x + mouse.x - drag.mouse.x
+                         + drag.rectAtGrab.minX + drag.rectAtGrab.width * grip - rect.minX - rect.width * grip,
+                       y: drag.origin.y + mouse.y - drag.mouse.y + drag.rectAtGrab.maxY - rect.maxY)
     }
 
     /// A pinch may start immediately after mouse-up. Finish the release animation

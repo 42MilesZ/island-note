@@ -9,6 +9,13 @@ enum PanelSize: String {
         case .large: return NSSize(width: 690, height: 550)
         }
     }
+
+    var floatingDimensions: NSSize {
+        switch self {
+        case .standard: return NSSize(width: 420, height: 460)
+        case .large: return NSSize(width: 560, height: 620)
+        }
+    }
 }
 
 /// Accumulate native magnification deltas and commit at most once per gesture.
@@ -19,7 +26,7 @@ struct PanelPinch {
 
     mutating func reset() { self = PanelPinch() }
 
-    mutating func update(delta: CGFloat, phase: NSEvent.Phase, size: PanelSize) -> PanelSize? {
+    mutating func update(delta: CGFloat, phase: NSEvent.Phase, size: PanelSize?) -> PanelSize? {
         if phase.contains(.began) { reset() }
         if phase.contains(.cancelled) {
             reset()

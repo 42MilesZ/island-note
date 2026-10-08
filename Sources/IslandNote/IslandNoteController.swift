@@ -96,6 +96,7 @@ final class IslandNoteController: NSObject {
     private var shadowLayer: CALayer!
     private var dragInteraction: PanelDragCoordinator!
     private var displayObservation: NSObjectProtocol?
+    private var resizeHandles: PanelResizeView!
 
     // 几何
     private var screenFrame = NSRect.zero
@@ -113,7 +114,16 @@ final class IslandNoteController: NSObject {
     private var panelSize: PanelSize = .standard
     private var pinch = PanelPinch()
     private var resizeTimer: Timer?
-    private var resizeEndsAt: CFTimeInterval = 0
+    private var floatingSize: NSSize?
+    private var targetViewportSize: NSSize?
+    private struct EdgeResize {
+        let edges: PanelResizeEdges
+        let mouse: NSPoint
+        let rect: NSRect
+        let maximum: NSSize
+        let screen: NSRect
+    }
+    private var edgeResize: EdgeResize?
     private let logger = Logger(subsystem: "com.islandnote", category: "PanelResize")
 
     private let compactTopR: CGFloat = 10
@@ -226,9 +236,9 @@ final class IslandNoteController: NSObject {
         panelH = PanelSize.standard.dimensions.height
         // Space for the lifted shadow on all sides, including above a floating panel.
         gutter = 64
-        // Keep the window fixed at the largest size, with room for spring overshoot.
-        eW = min(PanelSize.large.dimensions.width + gutter * 2, sf.width)
-        eH = min(PanelSize.large.dimensions.height + gutter * 2, sf.height + gutter)
+        // The canvas also accommodates user-sized floating panels and their shadows.
+        eW = min(FloatingPanelLayout.maximum.width + gutter * 2, sf.width + gutter * 2)
+        eH = min(FloatingPanelLayout.maximum.height + gutter * 2, sf.height + gutter * 2)
 
         let winFrame = NSRect(x: sf.midX - eW / 2, y: sf.maxY - canvasTop, width: eW, height: eH)
 
@@ -309,6 +319,9 @@ final class IslandNoteController: NSObject {
         island.addSubview(editor)
 
         content.addSubview(island)
+        resizeHandles = PanelResizeView(frame: content.bounds)
+        resizeHandles.panelRect = expandedRect
+        content.addSubview(resizeHandles, positioned: .above, relativeTo: island)
         panel.contentView = content
         panel.orderFrontRegardless()
 
@@ -318,14 +331,16 @@ final class IslandNoteController: NSObject {
             onDock: { [weak self] shouldCollapse in
                 guard let self else { return }
                 if shouldCollapse { self.collapse() }
-            })
+            }, getTargetRect: { [weak self] in
+                guard let self else { return .zero }
+                return self.viewportFrame(size: self.targetViewportSize ?? self.expandedRect.size)
+            }, onFloatingChange: { [weak self] floating in self?.changeFloatingLayout(floating) })
         editor.dragHandle.onBegin = { [weak self] point in
             guard let self, self.mode == .expanded else { return }
             self.pendingCollapse?.cancel()
             self.pendingCollapse = nil
-            // Finish any viewport resize before taking a screen-space drag anchor.
-            self.resizeTimer?.invalidate()
-            self.resizeTimer = nil
+            // A new grab starts from the currently displayed intermediate viewport.
+            self.stopViewportAnimation()
             self.pinch.reset()
             self.editor.frame = self.expandedRect
             self.hitGate.hitRect = self.expandedRect
@@ -333,7 +348,16 @@ final class IslandNoteController: NSObject {
             self.dragInteraction.begin(at: point)
         }
         editor.dragHandle.onMove = { [weak self] in self?.dragInteraction.move(to: $0) }
-        editor.dragHandle.onEnd = { [weak self] in self?.dragInteraction.end(at: $0) }
+        editor.dragHandle.onEnd = { [weak self] point in
+            guard let self else { return }
+            self.dragInteraction.end(at: point)
+            if self.mode == .expanded, !self.dragInteraction.isFloating, !self.dragInteraction.isInteracting {
+                self.animateViewport(to: self.panelSize.dimensions)
+            }
+        }
+        resizeHandles.onBegin = { [weak self] edges, point in self?.beginEdgeResize(edges: edges, at: point) }
+        resizeHandles.onMove = { [weak self] point in self?.moveEdgeResize(to: point) }
+        resizeHandles.onEnd = { [weak self] point in self?.endEdgeResize(at: point) }
         displayObservation = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -374,6 +398,13 @@ final class IslandNoteController: NSObject {
         hoverRect.size.height += 4
         let origin = NSPoint(x: screenFrame.midX - eW / 2, y: screenFrame.maxY - canvasTop)
         dragInteraction.updateDock(anchorRect: restRect.offsetBy(dx: origin.x, dy: origin.y), origin: origin)
+        if dragInteraction.isFloating, !dragInteraction.isInteracting {
+            edgeResize = nil
+            stopViewportAnimation()
+            let fitted = FloatingPanelLayout.clamped(floatingSize ?? expandedRect.size, maximum: floatingMaximum())
+            floatingSize = fitted
+            applyViewport(size: fitted)
+        }
         if !dragInteraction.preventsCollapse {
             hitGate.hitRect = rect(for: mode)
             island.hitRect = rect(for: mode)
@@ -423,10 +454,32 @@ final class IslandNoteController: NSObject {
         monitors = [g, l, gc, lc, gr, lr, lk, lm].compactMap { $0 }
     }
 
-    private func expandedFrame(for size: PanelSize) -> NSRect {
-        let width = min(size.dimensions.width, eW)
-        let height = min(size.dimensions.height, canvasTop - gutter)
+    private func expandedFrame(for size: PanelSize) -> NSRect { viewportFrame(size: size.dimensions) }
+
+    private func viewportFrame(size: NSSize) -> NSRect {
+        let width = min(size.width, eW - gutter * 2)
+        let height = min(size.height, canvasTop - gutter)
         return NSRect(x: (eW - width) / 2, y: canvasTop - height, width: width, height: height)
+    }
+
+    private func floatingMaximum(screen: NSScreen? = nil) -> NSSize {
+        let visible = (screen ?? panel.screen ?? notchScreen()).visibleFrame
+        return NSSize(width: min(eW - gutter * 2, visible.width),
+                      height: min(canvasTop - gutter, visible.height))
+    }
+
+    private func changeFloatingLayout(_ floating: Bool) {
+        edgeResize = nil
+        resizeHandles.isEnabled = floating
+        if floating {
+            let size = FloatingPanelLayout.clamped(floatingSize ?? panelSize.floatingDimensions,
+                                                    maximum: floatingMaximum())
+            floatingSize = size
+            animateViewport(to: size)
+        } else {
+            animateViewport(to: panelSize.dimensions)
+        }
+        updateViewportHitAreas()
     }
 
     private func handleMagnify(_ event: NSEvent) -> Bool {
@@ -434,61 +487,118 @@ final class IslandNoteController: NSObject {
     }
 
     func handleMagnification(delta: CGFloat, phase: NSEvent.Phase, locationInWindow: NSPoint) -> Bool {
-        guard mode == .expanded else { return false }
+        guard mode == .expanded, edgeResize == nil else { return false }
         let visible = maskLayer.presentation()?.path?.boundingBoxOfPath ?? expandedRect
         guard pinch.isActive || visible.contains(locationInWindow), dragInteraction.prepareForResize() else { return false }
         pendingCollapse?.cancel()
         pendingCollapse = nil
-        if let target = pinch.update(delta: delta, phase: phase, size: panelSize) {
-            resize(to: target)
-        }
+        let current: PanelSize? = dragInteraction.isFloating
+            ? [PanelSize.standard, .large].first { $0.floatingDimensions == floatingSize }
+            : panelSize
+        if let target = pinch.update(delta: delta, phase: phase, size: current) { resize(to: target) }
         return true
     }
 
     private func resize(to size: PanelSize) {
-        guard size != panelSize else { return }
-        panelSize = size
-        expandedRect = expandedFrame(for: size)
-        let path = dragInteraction.path(for: expandedRect)
-        let spring = shapeSpring(for: .expanded)
-        spring.fromValue = maskLayer.presentation()?.path ?? maskLayer.path
-        spring.toValue = path
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        maskLayer.path = path
-        maskLayer.add(spring, forKey: "path")
-        dragInteraction.updateShadow(path: path)
-        CATransaction.commit()
+        if dragInteraction.isFloating {
+            let current = floatingSize ?? expandedRect.size
+            let isPreset = [PanelSize.standard, .large].contains { $0.floatingDimensions == current }
+            let scale: CGFloat = size == .large ? 1.2 : 1 / 1.2
+            let requested = isPreset ? size.floatingDimensions
+                : NSSize(width: current.width * scale, height: current.height * scale)
+            let target = FloatingPanelLayout.clamped(requested, maximum: floatingMaximum())
+            guard target != expandedRect.size else { return }
+            floatingSize = target
+            animateViewport(to: target)
+        } else {
+            guard size != panelSize else { return }
+            panelSize = size
+            animateViewport(to: size.dimensions)
+        }
+        Haptics.resize()
+        logger.info("Panel size target: \(self.targetViewportSize?.width ?? self.expandedRect.width, privacy: .public) x \(self.targetViewportSize?.height ?? self.expandedRect.height, privacy: .public)")
+    }
 
+    private func stopViewportAnimation() {
         resizeTimer?.invalidate()
-        resizeEndsAt = CACurrentMediaTime() + spring.duration
-        // Layout follows the very same spring as the outline. This changes the
-        // viewport, not the text scale, and also keeps fades and hit testing aligned.
-        let timer = Timer(timeInterval: 1.0 / Double(max(60, panel.screen?.maximumFramesPerSecond ?? 60)), repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.updateResizeLayout() }
+        resizeTimer = nil
+        targetViewportSize = nil
+    }
+
+    private func animateViewport(to requested: NSSize) {
+        if targetViewportSize == requested { return }
+        stopViewportAnimation()
+        let target = viewportFrame(size: requested).size
+        guard target != expandedRect.size else { return }
+        let start = expandedRect.size
+        targetViewportSize = target
+        let duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.32
+        if duration == 0 { applyViewport(size: target); targetViewportSize = nil; return }
+        let began = ProcessInfo.processInfo.systemUptime
+        let timer = Timer(timeInterval: 1 / Double(max(60, panel.screen?.maximumFramesPerSecond ?? 60)), repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                let t = min(1, (ProcessInfo.processInfo.systemUptime - began) / duration)
+                let eased = CGFloat(t * t * (3 - 2 * t))
+                self.applyViewport(size: NSSize(width: start.width + (target.width - start.width) * eased,
+                                                height: start.height + (target.height - start.height) * eased))
+                if t >= 1 { self.stopViewportAnimation() }
+            }
         }
         resizeTimer = timer
         RunLoop.main.add(timer, forMode: .common)
-        Haptics.resize()
-        logger.debug("Panel size: \(size.rawValue, privacy: .public)")
     }
 
-    private func updateResizeLayout() {
-        let finished = CACurrentMediaTime() >= resizeEndsAt
-        let frame = finished ? expandedRect : (maskLayer.presentation()?.path?.boundingBoxOfPath ?? expandedRect)
+    private func applyViewport(size: NSSize) {
+        expandedRect = viewportFrame(size: size)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        editor.frame = frame
+        editor.frame = expandedRect
         editor.layoutSubtreeIfNeeded()
-        hitGate.hitRect = frame
-        island.hitRect = frame
-        dragInteraction.updateShadow(path: maskLayer.presentation()?.path ?? maskLayer.path!)
-        dragInteraction.recoverDisplay(rect: frame)
-        CATransaction.commit()
-        if finished {
-            resizeTimer?.invalidate()
-            resizeTimer = nil
+        updateViewportHitAreas()
+        if mode == .expanded {
+            dragInteraction.viewportDidChange()
+            dragInteraction.recoverDisplay(rect: expandedRect)
         }
+        CATransaction.commit()
+    }
+
+    private func updateViewportHitAreas() {
+        hitGate.hitRect = mode == .expanded && resizeHandles.isEnabled
+            ? expandedRect.insetBy(dx: -6, dy: -6) : rect(for: mode)
+        island.hitRect = rect(for: mode)
+        resizeHandles.panelRect = expandedRect
+    }
+
+    func beginEdgeResize(edges: PanelResizeEdges, at mouse: NSPoint) {
+        guard mode == .expanded, dragInteraction.isFloating, dragInteraction.prepareForResize() else { return }
+        stopViewportAnimation()
+        pinch.reset()
+        dragInteraction.recoverDisplay()
+        let screen = panel.screen ?? notchScreen()
+        let fitted = FloatingPanelLayout.clamped(expandedRect.size, maximum: floatingMaximum(screen: screen))
+        if fitted != expandedRect.size { floatingSize = fitted; applyViewport(size: fitted) }
+        edgeResize = EdgeResize(edges: edges, mouse: mouse, rect: screenRect(expandedRect),
+                                maximum: floatingMaximum(screen: screen), screen: screen.visibleFrame)
+        logger.info("Floating edge resize began")
+    }
+
+    func moveEdgeResize(to mouse: NSPoint) {
+        guard let session = edgeResize else { return }
+        let rect = FloatingPanelLayout.resized(session.rect, edges: session.edges,
+            delta: NSPoint(x: mouse.x - session.mouse.x, y: mouse.y - session.mouse.y),
+            maximum: session.maximum, screen: session.screen)
+        floatingSize = rect.size
+        let local = viewportFrame(size: rect.size)
+        panel.setFrameOrigin(NSPoint(x: rect.minX - local.minX, y: rect.minY - local.minY))
+        applyViewport(size: rect.size)
+    }
+
+    func endEdgeResize(at mouse: NSPoint) {
+        moveEdgeResize(to: mouse)
+        guard edgeResize != nil else { return }
+        edgeResize = nil
+        logger.info("Floating size: \(self.expandedRect.width, privacy: .public) x \(self.expandedRect.height, privacy: .public)")
     }
 
     // MARK: - 悬停 / 点击
@@ -675,14 +785,17 @@ final class IslandNoteController: NSObject {
     /// 只动画遮罩形状（顶边恒定）。expanded 用弹簧回弹。
     private func goTo(_ m: Mode) {
         guard m != mode else { return }
-        resizeTimer?.invalidate()
-        resizeTimer = nil
+        stopViewportAnimation()
+        edgeResize = nil
+        resizeHandles.isEnabled = false
+        if m != .expanded { expandedRect = expandedFrame(for: panelSize) }
         pinch.reset()
         pendingCollapse?.cancel()
         pendingCollapse = nil
         mode = m
         hitGate.hitRect = rect(for: m)
         island.hitRect = rect(for: m)
+        resizeHandles.panelRect = expandedRect
 
         // 只在展开态显示编辑器，收起时岛体是纯黑胶囊
         let showEditor = (m == .expanded)

@@ -52,7 +52,7 @@ final class FloatingPinchTests: XCTestCase {
         XCTAssertTrue(controller.handleMagnification(delta: 0.1, phase: .began, locationInWindow: location))
         XCTAssertTrue(controller.handleMagnification(delta: 0, phase: .ended, locationInWindow: location))
         settle()
-        XCTAssertEqual(editor.frame.size, PanelSize.large.dimensions)
+        XCTAssertEqual(editor.frame.size, PanelSize.large.floatingDimensions)
         XCTAssertEqual(panel.level, .floating)
         XCTAssertEqual(controller.mode, .expanded)
         let visible = editor.frame.offsetBy(dx: panel.frame.minX, dy: panel.frame.minY)
@@ -67,7 +67,7 @@ final class FloatingPinchTests: XCTestCase {
         XCTAssertTrue(controller.handleMagnification(delta: -0.1, phase: .began, locationInWindow: largeLocation))
         XCTAssertTrue(controller.handleMagnification(delta: 0, phase: .ended, locationInWindow: largeLocation))
         settle()
-        XCTAssertEqual(editor.frame.size, PanelSize.standard.dimensions)
+        XCTAssertEqual(editor.frame.size, PanelSize.standard.floatingDimensions)
         XCTAssertEqual(text.string, source)
         XCTAssertEqual(text.selectedRange(), selection)
 
