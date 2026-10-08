@@ -79,4 +79,65 @@ final class PanelResizeTests: XCTestCase {
         view.isEnabled = false
         XCTAssertNil(view.hitTest(NSPoint(x: r.minX, y: r.midY)))
     }
+
+    @MainActor
+    func testExpandedCornerHoverUsesResizeCursorWithoutClickingAndPreservesControls() throws {
+        _ = NSApplication.shared
+        let panel = IslandPanel(contentRect: NSRect(x: 100, y: 100, width: 800, height: 800),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.isReleasedWhenClosed = false
+        let previousCursor = NSCursor.current
+        defer { panel.close(); previousCursor.set() }
+        let root = IslandView(frame: NSRect(x: 0, y: 0, width: 800, height: 800))
+        let view = PanelResizeView(frame: root.bounds)
+        view.panelRect = NSRect(x: 100, y: 100, width: 420, height: 460)
+        view.isEnabled = true
+        root.hitRect = view.panelRect.insetBy(dx: -PanelResizeView.outsideReach, dy: -PanelResizeView.outsideReach)
+        root.addSubview(view)
+        panel.contentView = root
+        panel.resizeCursorAtPoint = { view.resizeCursor(at: $0) }
+        XCTAssertFalse(panel.isKeyWindow)
+        let r = view.panelRect
+        let corners: [(NSPoint, PanelResizeEdges)] = [
+            (NSPoint(x: r.minX + 32, y: r.minY + 32), [.left, .bottom]),
+            (NSPoint(x: r.maxX - 32, y: r.minY + 32), [.right, .bottom]),
+            (NSPoint(x: r.minX + 32, y: r.maxY - 32), [.left, .top]),
+            (NSPoint(x: r.maxX - 32, y: r.maxY - 33), [.right, .top]),
+            (NSPoint(x: r.minX - 12, y: r.minY - 12), [.left, .bottom]),
+            (NSPoint(x: r.maxX + 12, y: r.minY - 12), [.right, .bottom]),
+            (NSPoint(x: r.minX - 12, y: r.maxY + 12), [.left, .top]),
+            (NSPoint(x: r.maxX + 12, y: r.maxY + 12), [.right, .top])]
+        for (point, edges) in corners {
+            let handle = try XCTUnwrap(root.hitTest(point) as? PanelResizeHandle)
+            XCTAssertEqual(handle.edges, edges)
+            XCTAssertNotNil(view.resizeCursor(at: point))
+            XCTAssertTrue(handle.trackingAreas.contains { $0.options.contains([.mouseMoved, .activeAlways]) })
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+            NSCursor.iBeam.set()
+            handle.mouseEntered(with: event)
+            XCTAssertFalse(NSCursor.current === NSCursor.iBeam)
+            NSCursor.iBeam.set()
+            handle.cursorUpdate(with: event)
+            XCTAssertFalse(NSCursor.current === NSCursor.iBeam)
+            NSCursor.iBeam.set()
+            panel.sendEvent(event)
+            XCTAssertFalse(NSCursor.current === NSCursor.iBeam)
+            var receivedEdges: PanelResizeEdges?
+            view.onBegin = { receivedEdges = $0; _ = $1 }
+            handle.mouseDown(with: event)
+            XCTAssertEqual(receivedEdges, edges)
+        }
+        for point in [NSPoint(x: r.maxX - 16, y: r.maxY - 8), NSPoint(x: r.maxX - 27, y: r.maxY - 19),
+                      NSPoint(x: r.midX, y: r.maxY - 19), NSPoint(x: r.midX, y: r.midY)] {
+            XCTAssertNil(view.resizeCursor(at: point))
+            for handle in view.subviews {
+                let local = view.convert(point, to: handle)
+                XCTAssertFalse(handle.trackingAreas.contains { $0.rect.contains(local) })
+            }
+        }
+        view.isEnabled = false
+        XCTAssertNil(view.resizeCursor(at: corners[0].0))
+    }
 }

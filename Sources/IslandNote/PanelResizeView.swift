@@ -61,11 +61,24 @@ enum FloatingPanelLayout {
     }
 }
 
-private final class PanelResizeHandle: NSView {
+final class PanelResizeHandle: NSView {
     let edges: PanelResizeEdges
     var onBegin: ((NSPoint) -> Void)?
     var onMove: ((NSPoint) -> Void)?
     var onEnd: ((NSPoint) -> Void)?
+    var excludedRect = NSRect.zero
+    private var hoverAreas: [NSTrackingArea] = []
+
+    var interactiveRects: [NSRect] {
+        let cut = bounds.intersection(excludedRect)
+        guard !cut.isEmpty else { return [bounds] }
+        return [NSRect(x: bounds.minX, y: bounds.minY, width: cut.minX - bounds.minX, height: bounds.height),
+                NSRect(x: cut.maxX, y: bounds.minY, width: bounds.maxX - cut.maxX, height: bounds.height),
+                NSRect(x: cut.minX, y: bounds.minY, width: cut.width, height: cut.minY - bounds.minY),
+                NSRect(x: cut.minX, y: cut.maxY, width: cut.width, height: bounds.maxY - cut.maxY)].filter { !$0.isEmpty }
+    }
+
+    func containsResizePoint(_ point: NSPoint) -> Bool { interactiveRects.contains { $0.contains(point) } }
 
     init(edges: PanelResizeEdges) {
         self.edges = edges
@@ -93,23 +106,64 @@ private final class PanelResizeHandle: NSView {
     }
     private static let risingCursor = diagonalCursor(rising: true)
     private static let fallingCursor = diagonalCursor(rising: false)
-    private var cursor: NSCursor {
+    var resizeCursor: NSCursor {
+        if #available(macOS 15, *) {
+            let position: NSCursor.FrameResizePosition
+            switch edges {
+            case .left: position = .left
+            case .right: position = .right
+            case .top: position = .top
+            case .bottom: position = .bottom
+            case [.left, .top]: position = .topLeft
+            case [.right, .top]: position = .topRight
+            case [.left, .bottom]: position = .bottomLeft
+            default: position = .bottomRight
+            }
+            return .frameResize(position: position, directions: [.inward, .outward])
+        }
         if edges.intersection([.left, .right]).isEmpty { return .resizeUpDown }
         if edges.intersection([.top, .bottom]).isEmpty { return .resizeLeftRight }
         return edges == [.left, .bottom] || edges == [.right, .top] ? Self.risingCursor : Self.fallingCursor
     }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func resetCursorRects() { addCursorRect(bounds, cursor: cursor) }
+    override func resetCursorRects() {
+        for rect in interactiveRects { addCursorRect(rect, cursor: resizeCursor) }
+    }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for area in hoverAreas { removeTrackingArea(area) }
+        hoverAreas.removeAll()
+        for rect in interactiveRects {
+            // activeAlways delivers entered/moved even while the floating window
+            // is inactive. cursorUpdate uses a separate active-app area per AppKit.
+            for options: NSTrackingArea.Options in [[.mouseEnteredAndExited, .mouseMoved, .activeAlways], [.cursorUpdate, .activeInActiveApp]] {
+                let area = NSTrackingArea(rect: rect, options: options, owner: self, userInfo: nil)
+                addTrackingArea(area)
+                hoverAreas.append(area)
+            }
+        }
+    }
+    private func updateHoverCursor(_ event: NSEvent) {
+        guard let owner = superview as? PanelResizeView, owner.isEnabled,
+              containsResizePoint(convert(event.locationInWindow, from: nil)) else { return }
+        resizeCursor.set()
+    }
+    override func cursorUpdate(with event: NSEvent) { updateHoverCursor(event) }
+    override func mouseEntered(with event: NSEvent) { updateHoverCursor(event) }
+    override func mouseMoved(with event: NSEvent) { updateHoverCursor(event) }
+    override func mouseExited(with event: NSEvent) { window?.invalidateCursorRects(for: self) }
     private func screenPoint(_ event: NSEvent) -> NSPoint {
         event.window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
     }
-    override func mouseDown(with event: NSEvent) { cursor.set(); onBegin?(screenPoint(event)) }
+    override func mouseDown(with event: NSEvent) { resizeCursor.set(); onBegin?(screenPoint(event)) }
     override func mouseDragged(with event: NSEvent) { onMove?(screenPoint(event)) }
     override func mouseUp(with event: NSEvent) { onEnd?(screenPoint(event)); window?.invalidateCursorRects(for: self) }
 }
 
 /// A transparent sibling of the editor: only its narrow edges receive input.
 final class PanelResizeView: NSView {
+    static let outsideReach: CGFloat = 14
+    private static let insideReach: CGFloat = 34
     var onBegin: ((PanelResizeEdges, NSPoint) -> Void)?
     var onMove: ((NSPoint) -> Void)?
     var onEnd: ((NSPoint) -> Void)?
@@ -137,26 +191,29 @@ final class PanelResizeView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard isEnabled else { return nil }
-        // The top-right corner surrounds the editor's 24-point status button.
-        // Keep the button's full footprint available for its normal action.
-        let statusRect = NSRect(x: panelRect.maxX - 39, y: panelRect.maxY - 31, width: 24, height: 24)
-        guard !statusRect.contains(point) else { return nil }
-        return handles.reversed().first { $0.frame.contains(point) }
+        return handles.reversed().first { $0.containsResizePoint(convert(point, to: $0)) }
     }
+
+    func resizeCursor(at point: NSPoint) -> NSCursor? { (hitTest(point) as? PanelResizeHandle)?.resizeCursor }
 
     private func layoutHandles() {
         let r = panelRect
+        let inside = Self.insideReach, outside = Self.outsideReach
+        // Subtract the editor's full status-button footprint from both hover and clicks.
+        let statusRect = NSRect(x: r.maxX - 39, y: r.maxY - 31, width: 24, height: 24)
         for handle in handles {
             switch handle.edges {
-            case .left: handle.frame = NSRect(x: r.minX - 5, y: r.minY + 24, width: 10, height: max(0, r.height - 48))
-            case .right: handle.frame = NSRect(x: r.maxX - 5, y: r.minY + 24, width: 10, height: max(0, r.height - 48))
-            case .bottom: handle.frame = NSRect(x: r.minX + 24, y: r.minY - 5, width: max(0, r.width - 48), height: 10)
-            case .top: handle.frame = NSRect(x: r.minX + 24, y: r.maxY - 5, width: max(0, r.width - 48), height: 10)
+            case .left: handle.frame = NSRect(x: r.minX - 7, y: r.minY + inside, width: 14, height: max(0, r.height - inside * 2))
+            case .right: handle.frame = NSRect(x: r.maxX - 7, y: r.minY + inside, width: 14, height: max(0, r.height - inside * 2))
+            case .bottom: handle.frame = NSRect(x: r.minX + inside, y: r.minY - 7, width: max(0, r.width - inside * 2), height: 14)
+            case .top: handle.frame = NSRect(x: r.minX + inside, y: r.maxY - 7, width: max(0, r.width - inside * 2), height: 14)
             default:
-                handle.frame = NSRect(x: handle.edges.contains(.left) ? r.minX - 4 : r.maxX - 24,
-                                      y: handle.edges.contains(.bottom) ? r.minY - 4 : r.maxY - 24,
-                                      width: 28, height: 28)
+                handle.frame = NSRect(x: handle.edges.contains(.left) ? r.minX - outside : r.maxX - inside,
+                                      y: handle.edges.contains(.bottom) ? r.minY - outside : r.maxY - inside,
+                                      width: inside + outside, height: inside + outside)
             }
+            handle.excludedRect = statusRect.offsetBy(dx: -handle.frame.minX, dy: -handle.frame.minY)
+            handle.updateTrackingAreas()
             window?.invalidateCursorRects(for: handle)
         }
     }

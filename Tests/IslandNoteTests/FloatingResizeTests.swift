@@ -307,4 +307,27 @@ final class FloatingResizeTests: XCTestCase {
             XCTAssertEqual(editor.frame.size, customized)
         }
     }
+
+    func testCornerHoverChangesAreRecordedWithoutPointerCoordinates() throws {
+        let diagnostics = InteractionDiagnostics(defaults: nil, enabled: true)
+        try withPanel(diagnostics: diagnostics) { _, panel, editor, _ in
+            let start = header(panel, editor)
+            let release = NSPoint(x: start.x + 80, y: start.y - 170)
+            editor.dragHandle.onBegin?(start)
+            editor.dragHandle.onMove?(release)
+            editor.dragHandle.onEnd?(release)
+            settle()
+            let r = editor.frame
+            for point in [NSPoint(x: r.minX + 32, y: r.minY + 32), NSPoint(x: r.midX, y: r.midY)] {
+                let event = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: point, modifierFlags: [],
+                    timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+                panel.sendEvent(event)
+                XCTAssertEqual(diagnostics.events.last?.reason, .resizeHoverChanged)
+            }
+            let entries = diagnostics.events.filter { $0.reason == .resizeHoverChanged }
+            XCTAssertEqual(entries.first?.state.resizeHoverEdges, PanelResizeEdges([.left, .bottom]).rawValue)
+            XCTAssertNil(entries.last?.state.resizeHoverEdges)
+        }
+    }
 }

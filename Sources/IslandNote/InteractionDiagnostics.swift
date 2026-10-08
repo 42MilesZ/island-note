@@ -10,6 +10,7 @@ enum InteractionDiagnosticReason: String, Codable {
     case headerGrabbed, headerReleased, floatingChanged, edgeResizeBegan, edgeResizeEnded
     case gestureFinished, gestureInterrupted, noGestureEvents
     case continuousResizeBegan, continuousResizeFinished
+    case resizeHoverChanged
 
     var explanation: String {
         switch self {
@@ -35,6 +36,7 @@ enum InteractionDiagnosticReason: String, Codable {
         case .noGestureEvents: return "最近一分钟未收到缩放事件，需要检查系统手势投递或确认问题发生的时间。"
         case .continuousResizeBegan: return "悬浮面板开始随双指幅度连续调整尺寸。"
         case .continuousResizeFinished: return "连续缩放结束，已保留当前悬浮尺寸。"
+        case .resizeHoverChanged: return "指针进入、离开或切换了缩放提示区；区域记录在 resizeHoverEdges 中。"
         default: return "已记录交互状态。"
         }
     }
@@ -57,6 +59,7 @@ struct InteractionDiagnosticState: Codable {
     var targetHeight: Double?
     var screenWidth: Double
     var screenHeight: Double
+    var resizeHoverEdges: Int? = nil
 }
 
 struct InteractionDiagnosticEvent: Codable {

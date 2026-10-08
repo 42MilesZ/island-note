@@ -32,6 +32,15 @@ final class IslandPanel: NSPanel {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
     var onSyncSettings: (() -> Void)?
+    var resizeCursorAtPoint: ((NSPoint) -> NSCursor?)?
+
+    override func sendEvent(_ event: NSEvent) {
+        super.sendEvent(event)
+        // Resolve after the editor's cursor handlers so its I-beam cannot cover
+        // the resize indication. The resolver uses the exact mouse-down hit area.
+        if [.mouseMoved, .mouseEntered, .mouseExited, .cursorUpdate].contains(event.type),
+           let cursor = resizeCursorAtPoint?(event.locationInWindow) { cursor.set() }
+    }
 
     /// nonactivatingPanel 下菜单 keyEquivalent 不稳，这里显式把编辑命令派给 firstResponder；
     /// 其余 ⌘ 组合吞掉，避免系统「滴」声。
@@ -97,6 +106,7 @@ final class IslandNoteController: NSObject {
     private var dragInteraction: PanelDragCoordinator!
     private var displayObservation: NSObjectProtocol?
     private var resizeHandles: PanelResizeView!
+    private var lastResizeHover: PanelResizeEdges?
 
     // 几何
     private var screenFrame = NSRect.zero
@@ -282,6 +292,7 @@ final class IslandNoteController: NSObject {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.isMovableByWindowBackground = false
+        panel.acceptsMouseMovedEvents = true
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
@@ -337,6 +348,15 @@ final class IslandNoteController: NSObject {
         resizeHandles = PanelResizeView(frame: content.bounds)
         resizeHandles.panelRect = expandedRect
         content.addSubview(resizeHandles, positioned: .above, relativeTo: island)
+        panel.resizeCursorAtPoint = { [weak self] point in
+            guard let self else { return nil }
+            let handle = self.resizeHandles.hitTest(point) as? PanelResizeHandle
+            if handle?.edges != self.lastResizeHover {
+                self.lastResizeHover = handle?.edges
+                self.diagnostics.record(.resizeHoverChanged, state: self.diagnosticState())
+            }
+            return handle?.resizeCursor
+        }
         panel.contentView = content
         panel.orderFrontRegardless()
 
@@ -719,8 +739,9 @@ final class IslandNoteController: NSObject {
     }
 
     private func updateViewportHitAreas() {
+        if !resizeHandles.isEnabled { lastResizeHover = nil }
         hitGate.hitRect = mode == .expanded && resizeHandles.isEnabled
-            ? expandedRect.insetBy(dx: -6, dy: -6) : rect(for: mode)
+            ? expandedRect.insetBy(dx: -PanelResizeView.outsideReach, dy: -PanelResizeView.outsideReach) : rect(for: mode)
         island.hitRect = rect(for: mode)
         resizeHandles.panelRect = expandedRect
     }
@@ -863,7 +884,7 @@ final class IslandNoteController: NSObject {
             reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
             width: expandedRect.width, height: expandedRect.height,
             targetWidth: targetViewportSize.map { Double($0.width) }, targetHeight: targetViewportSize.map { Double($0.height) },
-            screenWidth: screen.width, screenHeight: screen.height)
+            screenWidth: screen.width, screenHeight: screen.height, resizeHoverEdges: lastResizeHover?.rawValue)
     }
 
     @objc func toggleDiagnostics() {
