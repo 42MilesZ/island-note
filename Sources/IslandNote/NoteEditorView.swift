@@ -9,6 +9,7 @@ extension Notification.Name {
 }
 
 private final class NoteEditorModel: ObservableObject {
+    @Published var localeRevision = 0
     @Published var text = ""
     @Published var isEditable = false
 }
@@ -71,7 +72,7 @@ private struct MarkdownEditorHost: View {
             isEditable: model.isEditable,
             onBuildContextMenu: onBuildContextMenu,
             placeholder: NSAttributedString(
-                string: "写点什么…",
+                string: L10n.tr("Write something…"),
                 attributes: [
                     .font: NSFont.systemFont(ofSize: 14),
                     .foregroundColor: NSColor(white: 1, alpha: 0.28),
@@ -90,10 +91,9 @@ final class NoteEditorView: NSView {
     private weak var observedClipView: NSClipView?
     private var scrollObservation: NSObjectProtocol?
     private let statusDot = CALayer()
-    #if !ISLAND_TESTFLIGHT
+    private var isFlomoEnabled = false
     private var syncDetail = "Flomo is not connected. Click to set up sync."
     private var displayedSyncPhase = SyncPhase.disconnected
-    #endif
     private var localSaveError: String?
     private var showingSavePulse = false
     private var savedPulse: DispatchWorkItem?
@@ -115,6 +115,7 @@ final class NoteEditorView: NSView {
     var onRequestCollapse: (() -> Void)?
     var onRequestQuit: (() -> Void)?
     var onRequestSync: (() -> Void)?
+    var onRequestSettings: (() -> Void)?
 
     var string: String {
         get { model.text }
@@ -150,11 +151,12 @@ final class NoteEditorView: NSView {
             },
             onBuildContextMenu: { [weak self] menu, _ in
                 self?.appendAppMenuItems(to: menu)
+                Self.localizeMenu(menu)
                 return menu
             },
             onLimitExceeded: { [weak self] in
                 if let self { self.hostedTextView(in: self.hostingView)?.undoManager?.removeAllActions() }
-                self?.showSaveError("30,000-character limit. The added text was not saved.")
+                self?.showSaveError(L10n.tr("30,000-character limit. The added text was not saved."))
             }
         )
         hostingView = NSHostingView(rootView: root)
@@ -170,7 +172,7 @@ final class NoteEditorView: NSView {
         syncButton.font = .systemFont(ofSize: 11, weight: .medium)
         syncButton.appearance = NSAppearance(named: .darkAqua)
         syncButton.onHover = { [weak self] hovered in self?.setStatusHovered(hovered) }
-        syncButton.setAccessibilityLabel("Local save status")
+        syncButton.setAccessibilityLabel(L10n.tr("Local save status"))
         syncButton.wantsLayer = true
         syncButton.target = self
         syncButton.action = #selector(openSyncSettings)
@@ -237,33 +239,38 @@ final class NoteEditorView: NSView {
         }
     }
 
-    #if !ISLAND_TESTFLIGHT
     func showSyncStatus(_ phase: SyncPhase, detail: String) {
         displayedSyncPhase = phase
         syncDetail = detail
         refreshStatusIndicator()
     }
 
-    #endif
+
+    func setFlomoEnabled(_ enabled: Bool) {
+        isFlomoEnabled = enabled
+        refreshStatusIndicator()
+    }
+
+    func refreshLocalizedUI() {
+        model.localeRevision += 1
+        outlineModel.objectWillChange.send()
+        dragHandle.refreshLocalizedUI()
+        refreshStatusIndicator()
+    }
+
+    @objc private func openSettings() { hideStatusHint(); onRequestSettings?() }
 
     private func refreshStatusIndicator() {
-        #if ISLAND_TESTFLIGHT
-        let details = localSaveError.map { "Local save failed: " + $0 }
-            ?? (showingSavePulse ? "Saved locally just now." : "Your note is saved on this Mac. No cloud sync is enabled.")
-        statusHint.label.stringValue = localSaveError == nil ? "Saved locally" : "Not saved · Click for details"
-        syncButton.setAccessibilityLabel(localSaveError == nil ? "Local save status" : "Local save failed")
-        let needsAction = false
-        let isBusy = false
-        #else
         let phase = displayedSyncPhase
-        let localDetail = localSaveError.map { "Local save failed: " + $0 }
-            ?? (showingSavePulse ? "Saved locally just now." : "Local save and Flomo sync")
-        let details = localDetail + "\n" + phase.title + "\n" + syncDetail
-        statusHint.label.stringValue = localSaveError == nil ? phase.hoverSummary : "Not saved · Click for details"
-        syncButton.setAccessibilityLabel(localSaveError == nil ? phase.title : "Local save failed")
-        let needsAction = phase.needsAction
-        let isBusy = phase.isBusy
-        #endif
+        let localDetail = localSaveError.map { L10n.tr("Local save failed: ") + $0 }
+            ?? (showingSavePulse ? L10n.tr("Saved locally just now.") : L10n.tr("Your note is saved on this Mac."))
+        let details = isFlomoEnabled ? localDetail + "\n" + phase.title + "\n" + syncDetail : localDetail
+        statusHint.label.stringValue = localSaveError != nil ? L10n.tr("Not saved · Click for details")
+            : (isFlomoEnabled ? phase.hoverSummary : L10n.tr("Saved locally"))
+        syncButton.setAccessibilityLabel(localSaveError != nil ? L10n.tr("Local save failed")
+            : (isFlomoEnabled ? phase.title : L10n.tr("Local save status")))
+        let needsAction = isFlomoEnabled && phase.needsAction
+        let isBusy = isFlomoEnabled && phase.isBusy
         syncButton.setAccessibilityHelp(details)
 
         // A local write failure must remain visible even if Flomo reports success.
@@ -552,48 +559,48 @@ final class NoteEditorView: NSView {
         return event
     }
 
+    static func localizeMenu(_ menu: NSMenu) {
+        for item in menu.items {
+            item.title = L10n.tr(item.title)
+            if let submenu = item.submenu { localizeMenu(submenu) }
+        }
+    }
+
     private func appendAppMenuItems(to menu: NSMenu) {
-        #if !ISLAND_TESTFLIGHT
-        let sync = NSMenuItem(title: "Flomo Sync…", action: #selector(openSyncSettings), keyEquivalent: "")
-        sync.target = self
-        menu.addItem(sync)
+            let settings = NSMenuItem(title: L10n.tr("Settings…"), action: #selector(openSettings), keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
+        if isFlomoEnabled {
+            let sync = NSMenuItem(title: L10n.tr("Flomo Sync…"), action: #selector(openSyncSettings), keyEquivalent: "")
+            sync.target = self
+            menu.addItem(sync)
+        }
         menu.addItem(.separator())
-        #endif
-        let bold = NSMenuItem(title: "Bold", action: #selector(applyBold), keyEquivalent: "b")
+        let bold = NSMenuItem(title: L10n.tr("Bold"), action: #selector(applyBold), keyEquivalent: "b")
         bold.target = self
         menu.addItem(bold)
-        let italic = NSMenuItem(title: "Italic", action: #selector(applyItalic), keyEquivalent: "i")
+        let italic = NSMenuItem(title: L10n.tr("Italic"), action: #selector(applyItalic), keyEquivalent: "i")
         italic.target = self
         menu.addItem(italic)
         menu.addItem(.separator())
-        let collapse = NSMenuItem(title: "Collapse", action: #selector(collapseFromMenu), keyEquivalent: "")
-        collapse.target = self
-        menu.addItem(collapse)
-        let quit = NSMenuItem(title: "Quit Island Note", action: #selector(quitFromMenu), keyEquivalent: "")
+        let quit = NSMenuItem(title: L10n.tr("Quit Island Note"), action: #selector(quitFromMenu), keyEquivalent: "")
         quit.target = self
         menu.addItem(quit)
     }
 
     @objc private func applyBold() { NotificationCenter.default.post(name: .islandNoteBold, object: nil) }
     @objc private func applyItalic() { NotificationCenter.default.post(name: .islandNoteItalic, object: nil) }
-    @objc private func collapseFromMenu() { onRequestCollapse?() }
     @objc private func quitFromMenu() { onRequestQuit?() }
     @objc private func openSyncSettings() {
         hideStatusHint()
         if let localSaveError {
             let alert = NSAlert()
-            alert.messageText = "Local save failed"
+            alert.messageText = L10n.tr("Local save failed")
             alert.informativeText = localSaveError
             alert.runModal()
         } else {
-            #if ISLAND_TESTFLIGHT
-            let alert = NSAlert()
-            alert.messageText = "Saved on this Mac"
-            alert.informativeText = "Island Note saves automatically. This beta does not include cloud sync."
-            alert.runModal()
-            #else
-            onRequestSync?()
-            #endif
+            if isFlomoEnabled, displayedSyncPhase.needsAction { onRequestSync?() }
+            else { onRequestSettings?() }
         }
     }
 }

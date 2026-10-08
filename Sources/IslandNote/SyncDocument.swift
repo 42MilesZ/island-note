@@ -169,18 +169,18 @@ enum SyncDocument {
     }
 
     static func issue(in text: String) -> String? {
-        if count(text) > limit { return "The document exceeds 30,000 characters. Shorten it before syncing." }
-        if normalized(text).isEmpty { return "The document is empty. Empty notes are not sent to Flomo." }
+        if count(text) > limit { return L10n.tr("The document exceeds 30,000 characters. Shorten it before syncing.") }
+        if normalized(text).isEmpty { return L10n.tr("The document is empty. Empty notes are not sent to Flomo.") }
         let patterns: [(String, String)] = [
-            (#"(?m)^\s*(?:[-+*]|\d+[.)])\s+\[[ xX]\]"#, "Checkboxes"),
-            (#"(?m)^\s*(?:`{3,}|~{3,})"#, "Code blocks"),
-            (#"(?m)^(?: {4,}|\t)(?![-+*]\s|\d+[.)]\s)\S"#, "Code blocks or deeply indented text"),
-            (#"(?m)^ {0,3}>"#, "Blockquotes"),
-            (#"!?\[[^\]\n]+\]\([^\n]*\)|\[\[|(?m)^ {0,3}\[[^\]\n]+\]:"#, "Markdown links and images"),
-            (#"(?m)^\s*\|?\s*:?-{3,}:?\s*\|(?:\s*:?-{3,}:?\s*\|?)+\s*$"#, "Tables"),
+            (#"(?m)^\s*(?:[-+*]|\d+[.)])\s+\[[ xX]\]"#, L10n.tr("Checkboxes")),
+            (#"(?m)^\s*(?:`{3,}|~{3,})"#, L10n.tr("Code blocks")),
+            (#"(?m)^(?: {4,}|\t)(?![-+*]\s|\d+[.)]\s)\S"#, L10n.tr("Code blocks or deeply indented text")),
+            (#"(?m)^ {0,3}>"#, L10n.tr("Blockquotes")),
+            (#"!?\[[^\]\n]+\]\([^\n]*\)|\[\[|(?m)^ {0,3}\[[^\]\n]+\]:"#, L10n.tr("Markdown links and images")),
+            (#"(?m)^\s*\|?\s*:?-{3,}:?\s*\|(?:\s*:?-{3,}:?\s*\|?)+\s*$"#, L10n.tr("Tables")),
         ]
         for (pattern, name) in patterns where text.range(of: pattern, options: .regularExpression) != nil {
-            return "\(name) are not supported by Flomo sync. Remove that syntax to resume. Your local text is still saved."
+            return L10n.format("%@ are not supported by Flomo sync. Remove that syntax to resume. Your local text is still saved.", L10n.tr(name))
         }
         return nil
     }

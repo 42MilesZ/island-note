@@ -19,9 +19,14 @@ protocol FlomoSearching {
 }
 
 protocol FlomoServing {
+    func setRequestsEnabled(_ enabled: Bool)
     func fetch(id: String) async throws -> FlomoMemo
     func create(content: String) async throws -> String
     func update(id: String, content: String, updatedAt: String) async throws
+}
+
+extension FlomoServing {
+    func setRequestsEnabled(_ enabled: Bool) {}
 }
 
 enum FlomoClientError: LocalizedError, Equatable {
@@ -32,9 +37,13 @@ enum FlomoClientError: LocalizedError, Equatable {
     case incompleteMemo
     case attachmentsUnsupported
     case unknownWriteOutcome
+    case cancelledBeforeWrite
 
-    var errorDescription: String? {
+    var errorDescription: String? { L10n.tr(messageKey) }
+
+    var messageKey: String {
         switch self {
+        case .cancelledBeforeWrite: return "Flomo was stopped before sending the note. No write was issued."
         case .authentication: return "Flomo authorization failed. Check the token in Island Note settings."
         case .rateLimited: return "Flomo is limiting requests. Try again later."
         case .conflict: return "The Flomo memo changed elsewhere. Review it before syncing again."
@@ -56,10 +65,28 @@ final class FlomoClient: FlomoServing, FlomoSearching {
     private let token: String
     private let session: URLSession
     private let redirectBlocker = RedirectBlocker()
+    private let permissionLock = NSLock()
+    private var requestsEnabled = true
+    private var requestGeneration = UUID()
 
     init(token: String, session: URLSession = .shared) {
         self.token = token
         self.session = session
+    }
+
+    func setRequestsEnabled(_ enabled: Bool) {
+        permissionLock.lock()
+        defer { permissionLock.unlock() }
+        requestsEnabled = enabled
+        requestGeneration = UUID()
+    }
+
+    private func requirePermission(_ generation: UUID? = nil) throws -> UUID {
+        permissionLock.lock()
+        defer { permissionLock.unlock() }
+        guard requestsEnabled, !Task.isCancelled,
+              generation == nil || generation == requestGeneration else { throw FlomoClientError.cancelledBeforeWrite }
+        return requestGeneration
     }
 
     func search(keywords: String) async throws -> [FlomoMemoPreview] {
@@ -71,7 +98,7 @@ final class FlomoClient: FlomoServing, FlomoSearching {
         return try memos.map { memo in
             guard let id = memo["id"] as? String, !id.isEmpty,
                   let updated = memo["updated_at"] as? String else { throw FlomoClientError.incompleteMemo }
-            return FlomoMemoPreview(id: id, content: memo["content"] as? String ?? "(No text preview)",
+            return FlomoMemoPreview(id: id, content: memo["content"] as? String ?? L10n.tr("(No text preview)"),
                                     updatedAt: updated, truncated: memo["content_truncated"] as? Bool ?? true)
         }
     }
@@ -114,7 +141,8 @@ final class FlomoClient: FlomoServing, FlomoSearching {
     }
 
     private func call(_ name: String, arguments: [String: Any], isWrite: Bool) async throws -> [String: Any] {
-        let context = try await initialize()
+        let generation = try requirePermission()
+        let context = try await initialize(generation: generation)
         let id = UUID().uuidString
         let envelope: [String: Any] = [
             "jsonrpc": "2.0", "id": id, "method": "tools/call",
@@ -122,7 +150,7 @@ final class FlomoClient: FlomoServing, FlomoSearching {
         ]
         let response: [String: Any]
         do {
-            response = try await post(envelope, id: id, context: context)
+            response = try await post(envelope, id: id, context: context, generation: generation)
         } catch let error as FlomoClientError {
             switch error {
             case .unavailable where isWrite: throw FlomoClientError.unknownWriteOutcome
@@ -151,7 +179,7 @@ final class FlomoClient: FlomoServing, FlomoSearching {
         let sessionID: String?
     }
 
-    private func initialize() async throws -> Context {
+    private func initialize(generation: UUID) async throws -> Context {
         guard !token.isEmpty else { throw FlomoClientError.authentication }
         let id = UUID().uuidString
         let envelope: [String: Any] = [
@@ -162,7 +190,7 @@ final class FlomoClient: FlomoServing, FlomoSearching {
                 "clientInfo": ["name": "Island Note", "version": "1.0"]
             ]
         ]
-        let (body, http) = try await send(envelope, context: nil)
+        let (body, http) = try await send(envelope, context: nil, generation: generation)
         let response = try parseRPC(body, contentType: http.value(forHTTPHeaderField: "Content-Type"), id: id)
         if let error = response["error"] as? [String: Any] { throw classifyRPCError(error) }
         guard let result = response["result"] as? [String: Any],
@@ -171,18 +199,18 @@ final class FlomoClient: FlomoServing, FlomoSearching {
 
         let context = Context(version: version, sessionID: http.value(forHTTPHeaderField: "Mcp-Session-Id"))
         let notification: [String: Any] = ["jsonrpc": "2.0", "method": "notifications/initialized"]
-        _ = try await send(notification, context: context)
+        _ = try await send(notification, context: context, generation: generation)
         return context
     }
 
-    private func post(_ envelope: [String: Any], id: String, context: Context) async throws -> [String: Any] {
-        let (body, http) = try await send(envelope, context: context)
+    private func post(_ envelope: [String: Any], id: String, context: Context, generation: UUID) async throws -> [String: Any] {
+        let (body, http) = try await send(envelope, context: context, generation: generation)
         let response = try parseRPC(body, contentType: http.value(forHTTPHeaderField: "Content-Type"), id: id)
         if let error = response["error"] as? [String: Any] { throw classifyRPCError(error) }
         return response
     }
 
-    private func send(_ envelope: [String: Any], context: Context?) async throws -> (Data, HTTPURLResponse) {
+    private func send(_ envelope: [String: Any], context: Context?, generation: UUID) async throws -> (Data, HTTPURLResponse) {
         var request = URLRequest(url: Self.endpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = 30
@@ -197,6 +225,7 @@ final class FlomoClient: FlomoServing, FlomoSearching {
         }
         do {
             request.httpBody = try JSONSerialization.data(withJSONObject: envelope)
+            _ = try requirePermission(generation)
             let (data, response) = try await session.data(for: request, delegate: redirectBlocker)
             guard let http = response as? HTTPURLResponse,
                   http.url?.scheme == "https", http.url?.host == Self.endpoint.host,

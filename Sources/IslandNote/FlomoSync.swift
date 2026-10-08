@@ -49,7 +49,7 @@ enum SyncComparison {
 @MainActor
 final class FlomoSync {
     private(set) var record: SyncRecord
-    private(set) var status = "Flomo not connected"
+    private(set) var status = L10n.tr("Flomo not connected")
     private(set) var conflict: SyncConflict?
     private(set) var phase: SyncPhase = .disconnected
     var onStatus: ((SyncPhase, String) -> Void)?
@@ -62,6 +62,8 @@ final class FlomoSync {
     private var timer: Timer?
     private var debounce: DispatchWorkItem?
     private var running = false
+    private var stopped = false
+    private var rawStatus = "Flomo not connected"
     private var generation = UUID()
     private let logger = Logger(subsystem: "local.projects.island-note", category: "FlomoSync")
 
@@ -73,7 +75,9 @@ final class FlomoSync {
     }
 
     func start(client: FlomoServing) {
+        guard !stopped else { return }
         self.client = client
+        client.setRequestsEnabled(record.enabled)
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.request() }
@@ -83,6 +87,7 @@ final class FlomoSync {
     }
 
     func connect(client: FlomoServing, memoID: String?) async {
+        guard !stopped else { return }
         guard !running else { report("Wait for the current sync to finish"); return }
         guard !record.creationUncertain || memoID != nil else {
             report("A note may already exist. Use Find Existing Memo before reconnecting.", phase: .recoverCreate); return
@@ -95,7 +100,22 @@ final class FlomoSync {
         start(client: client)
     }
 
+    /// Disable the extension without deleting its credentials, memo or write intent.
+    /// Already-sent writes may complete; their returned IDs must still be retained.
+    func stop() {
+        stopped = true
+        client?.setRequestsEnabled(false)
+        generation = UUID()
+        report("Flomo extension is off. Local notes and the previous sync preference are retained.", phase: .paused)
+        timer?.invalidate(); timer = nil
+        debounce?.cancel(); debounce = nil
+        client = nil
+    }
+
+    func allowConnections() { stopped = false }
+
     func pause() {
+        client?.setRequestsEnabled(false)
         generation = UUID()
         record.enabled = false
         debounce?.cancel()
@@ -105,13 +125,14 @@ final class FlomoSync {
 
     func resume() {
         guard client != nil else { report("Connect a Flomo token first.", phase: .authorizationRequired); return }
+        client?.setRequestsEnabled(true)
         record.enabled = true
         do { try persist(); request() }
         catch { record.enabled = false; report("Could not resume sync") }
     }
 
     func localChanged() {
-        guard record.enabled else { return }
+        guard !stopped, record.enabled else { return }
         debounce?.cancel()
         if conflict == nil, !running { report("Saved locally. Sync starts after 3 seconds without edits.", phase: .waiting) }
         let work = DispatchWorkItem { [weak self] in self?.request() }
@@ -120,12 +141,12 @@ final class FlomoSync {
     }
 
     func request() {
-        guard record.enabled, !running, client != nil else { return }
+        guard !stopped, record.enabled, !running, client != nil else { return }
         Task { await synchronize() }
     }
 
     func synchronize(choice: SyncChoice? = nil, reviewed: SyncConflict? = nil) async {
-        guard record.enabled, !running, let client, let readLocal else { return }
+        guard !stopped, record.enabled, !running, let client, let readLocal else { return }
         running = true
         defer { running = false }
         let epoch = generation
@@ -156,7 +177,7 @@ final class FlomoSync {
                 record.creationUncertain = false
                 try persist()
             }
-            guard let id = record.memoID else { return }
+            guard record.enabled, generation == epoch, let id = record.memoID else { return }
             let remote = try await client.fetch(id: id)
             await settleEditorUpdates()
             guard record.enabled, generation == epoch else { return }
@@ -271,6 +292,7 @@ final class FlomoSync {
                 try persist()
                 report("Uploading local changes and verifying the saved memo…", phase: .syncing)
                 try await client.update(id: id, content: SyncDocument.toFlomo(local), updatedAt: remote.updatedAt)
+                guard !stopped, record.enabled, generation == epoch else { return }
                 let verified = try await client.fetch(id: id)
                 guard record.enabled, generation == epoch else { return }
                 guard SyncDocument.equivalent(local: local, remote: SyncDocument.fromFlomo(verified.content)) else {
@@ -293,6 +315,12 @@ final class FlomoSync {
                 } else { report("Both copies are up to date.", phase: .synced) }
             }
         } catch {
+            if record.memoID == nil, error as? FlomoClientError == .cancelledBeforeWrite {
+                record.creationUncertain = false
+                record.pendingWrite = nil
+                record.pendingEncodedContent = nil
+                try? persist()
+            }
             guard generation == epoch else { return }
             if record.memoID == nil, error as? FlomoClientError == .authentication {
                 record.creationUncertain = false
@@ -313,7 +341,7 @@ final class FlomoSync {
             case SyncFailure.localChanged: failurePhase = .localChanged
             default: failurePhase = .failed
             }
-            report(error.localizedDescription, phase: failurePhase)
+            report((error as? FlomoClientError)?.messageKey ?? (error as? SyncFailure)?.messageKey ?? error.localizedDescription, phase: failurePhase)
         }
     }
 
@@ -344,11 +372,14 @@ final class FlomoSync {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
+    func refreshLanguage() { report(rawStatus, phase: phase) }
+
     private func report(_ text: String, phase: SyncPhase = .failed) {
         self.phase = phase
-        status = text
+        rawStatus = text
+        status = L10n.tr(text)
         if let verified = record.lastVerifiedAt {
-            status += "\nLast verified: " + verified.formatted(date: .abbreviated, time: .shortened)
+            status += "\n" + L10n.tr("Last verified: ") + verified.formatted(date: .abbreviated, time: .shortened)
         }
         logger.info("Sync state: \(text, privacy: .public)")
         onStatus?(phase, status)
@@ -359,7 +390,9 @@ final class FlomoSync {
 
 enum SyncFailure: LocalizedError {
     case localUnavailable, localChanged
-    var errorDescription: String? {
+    var errorDescription: String? { L10n.tr(messageKey) }
+
+    var messageKey: String {
         switch self {
         case .localUnavailable: return "The local document is unavailable. Sync stopped."
         case .localChanged: return "The local document changed during sync. Both copies are preserved."

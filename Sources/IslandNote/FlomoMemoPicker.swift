@@ -6,8 +6,8 @@ final class FlomoMemoPicker: NSObject, NSTableViewDataSource, NSTableViewDelegat
     private let client: FlomoSearching
     private let alert = NSAlert()
     private let query = NSSearchField()
-    private let searchButton = NSButton(title: "Search", target: nil, action: nil)
-    private let status = NSTextField(wrappingLabelWithString: "Enter a distinctive phrase from your memo.")
+    private let searchButton = NSButton(title: L10n.tr("Search"), target: nil, action: nil)
+    private let status = NSTextField(wrappingLabelWithString: L10n.tr("Enter a distinctive phrase from your memo."))
     private let table = NSTableView()
     private var task: Task<Void, Never>?
     private(set) var results: [FlomoMemoPreview] = []
@@ -16,13 +16,13 @@ final class FlomoMemoPicker: NSObject, NSTableViewDataSource, NSTableViewDelegat
     init(client: FlomoSearching) {
         self.client = client
         super.init()
-        alert.messageText = "Find an existing Flomo memo"
-        alert.informativeText = "Search by text, then select the memo you want to link. No URL or ID needed."
-        alert.addButton(withTitle: "Use Selected Memo").isEnabled = false
-        alert.addButton(withTitle: "Cancel")
+        alert.messageText = L10n.tr("Find an existing Flomo memo")
+        alert.informativeText = L10n.tr("Search by text, then select the memo you want to link. No URL or ID needed.")
+        alert.addButton(withTitle: L10n.tr("Use Selected Memo")).isEnabled = false
+        alert.addButton(withTitle: L10n.tr("Cancel"))
 
-        query.placeholderString = "Words or a sentence from the memo"
-        query.setAccessibilityLabel("Search Flomo memos")
+        query.placeholderString = L10n.tr("Words or a sentence from the memo")
+        query.setAccessibilityLabel(L10n.tr("Search Flomo memos"))
         query.sendsSearchStringImmediately = false
         query.sendsWholeSearchString = true
         query.target = self
@@ -43,7 +43,7 @@ final class FlomoMemoPicker: NSObject, NSTableViewDataSource, NSTableViewDelegat
         table.allowsMultipleSelection = false
         table.dataSource = self
         table.delegate = self
-        table.setAccessibilityLabel("Matching Flomo memos")
+        table.setAccessibilityLabel(L10n.tr("Matching Flomo memos"))
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
@@ -78,15 +78,15 @@ final class FlomoMemoPicker: NSObject, NSTableViewDataSource, NSTableViewDelegat
         alert.buttons[0].isEnabled = false
         searchButton.isEnabled = false
         query.isEnabled = false
-        status.stringValue = "Searching Flomo…"
+        status.stringValue = L10n.tr("Searching Flomo…")
         task = Task { [weak self, client] in
             do {
                 let matches = try await client.search(keywords: keywords)
                 guard let self, !self.isClosed, !Task.isCancelled else { return }
                 self.results = matches
                 self.table.reloadData()
-                self.status.stringValue = matches.isEmpty ? "No matches. Try another phrase."
-                    : "\(matches.count) matches. Select a preview below. Refine the search if needed (up to 50 results)."
+                self.status.stringValue = matches.isEmpty ? L10n.tr("No matches. Try another phrase.")
+                    : L10n.format("%d matches. Select a preview below. Refine the search if needed (up to 50 results).", matches.count)
                 self.finishSearch()
             } catch {
                 guard let self, !self.isClosed, !Task.isCancelled else { return }
@@ -108,7 +108,7 @@ final class FlomoMemoPicker: NSObject, NSTableViewDataSource, NSTableViewDelegat
         let memo = results[row]
         let date = memo.updatedAt.replacingOccurrences(of: "T", with: " ")
         let preview = SyncDocument.fromFlomo(memo.content).replacingOccurrences(of: "\n", with: "  ")
-        let label = NSTextField(wrappingLabelWithString: "\(date)\(memo.truncated ? " · excerpt" : "")\n\(preview)")
+        let label = NSTextField(wrappingLabelWithString: "\(date)\(memo.truncated ? L10n.tr(" · excerpt") : "")\n\(preview)")
         label.font = .systemFont(ofSize: 12)
         label.maximumNumberOfLines = 4
         label.lineBreakMode = .byTruncatingTail

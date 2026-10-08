@@ -110,9 +110,9 @@ struct HeadingOutline: View {
                     .allowsHitTesting(false)
             }
         }
-        .accessibilityLabel("Heading \(heading.level): \(heading.title)")
-        .accessibilityValue(active ? "Current section" : "")
-        .accessibilityHint("Scroll to this section")
+        .accessibilityLabel(L10n.format("Heading %d: %@", heading.level, heading.title))
+        .accessibilityValue(active ? L10n.tr("Current section") : "")
+        .accessibilityHint(L10n.tr("Scroll to this section"))
     }
 }
 

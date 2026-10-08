@@ -6,7 +6,7 @@ cd "$(dirname "$0")/.."
 : "${ASC_ISSUER_ID:?ASC_ISSUER_ID is required}"
 key_path="$HOME/.appstoreconnect/private_keys/AuthKey_${ASC_KEY_ID}.p8"
 [[ -f "$key_path" ]] || { echo 'App Store Connect key is missing.' >&2; exit 1; }
-build_number="${BUILD_NUMBER:-3}"
+build_number="${BUILD_NUMBER:-4}"
 [[ "$build_number" =~ ^[1-9][0-9]{0,3}$ ]] || { echo 'BUILD_NUMBER must be an increasing integer from 1 to 9999.' >&2; exit 1; }
 archive_path="$PWD/.build/testflight/$build_number/IslandNote.xcarchive"
 export_path="$PWD/.build/testflight/$build_number/export"
@@ -24,12 +24,7 @@ xcodebuild -exportArchive -archivePath "$archive_path" \
 app="$archive_path/Products/Applications/IslandNote.app"
 codesign --verify --deep --strict "$app"
 lipo "$app/Contents/MacOS/IslandNote" -verify_arch arm64 x86_64
-# Both binary slices must exclude the networking and credential implementation.
-nm "$app/Contents/MacOS/IslandNote" > "$archive_path/symbols.txt"
-if grep -Eq 'FlomoClient|FlomoCredential|FlomoSync' "$archive_path/symbols.txt" || \
-   LC_ALL=C grep -aEq 'flomoapp\.com|memo_batch_get|memo_create|SecItemCopyMatching' "$app/Contents/MacOS/IslandNote"; then
-    echo 'Flomo implementation unexpectedly entered the TestFlight build.' >&2; exit 1
-fi
+# Flomo is bundled in the sandboxed store build, and remains opt-in at runtime.
 packages=("$export_path"/*.pkg)
 [[ ${#packages[@]} == 1 && -f "${packages[0]}" ]] || { echo 'Export must produce exactly one macOS package.' >&2; exit 1; }
 pkg="${packages[0]}"

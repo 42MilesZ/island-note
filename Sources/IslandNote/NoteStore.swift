@@ -10,9 +10,9 @@ final class NoteStore {
         var errorDescription: String? {
             switch self {
             case .changedOutsideApp:
-                return "Island Note.md changed in another app. The Vault file was not overwritten. Copy your unsaved text before restarting, then resolve the two versions."
+                return L10n.tr("Island Note.md changed in another app. The Vault file was not overwritten. Copy your unsaved text before restarting, then resolve the two versions.")
             case .documentNotLoaded:
-                return "The Vault document has not loaded. Saving is blocked to protect its existing contents."
+                return L10n.tr("The Vault document has not loaded. Saving is blocked to protect its existing contents.")
             }
         }
     }
@@ -60,7 +60,7 @@ final class NoteStore {
     }
 
     static var defaultDirectory: URL {
-        #if ISLAND_TESTFLIGHT
+        #if ISLAND_APP_STORE || ISLAND_TESTFLIGHT
         // Foundation resolves this inside the App Sandbox container.
         return FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("IslandNote", isDirectory: true)

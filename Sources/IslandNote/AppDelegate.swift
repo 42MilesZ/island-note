@@ -18,9 +18,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 sender.reply(toApplicationShouldTerminate: true)
             } else {
                 let alert = NSAlert()
-                alert.messageText = "Island Note could not save"
-                alert.informativeText = store.lastErrorMessage ?? "Your text is still open. Check the red save indicator before quitting."
-                alert.addButton(withTitle: "Keep Editing")
+                alert.messageText = L10n.tr("Island Note could not save")
+                alert.informativeText = store.lastErrorMessage ?? L10n.tr("Your text is still open. Check the red save indicator before quitting.")
+                alert.addButton(withTitle: L10n.tr("Keep Editing"))
                 alert.runModal()
                 sender.reply(toApplicationShouldTerminate: false)
             }

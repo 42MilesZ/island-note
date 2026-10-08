@@ -10,6 +10,7 @@ private final class FakeFlomo: FlomoServing {
     var createError: Error?
     var updateError: Error?
     var fetchError: Error?
+    var onCreate: (() -> Void)?
     var onFetch: (() -> Void)?
     var onUpdate: (() -> Void)?
     var changeOnWrite = false
@@ -21,6 +22,7 @@ private final class FakeFlomo: FlomoServing {
     }
     func create(content: String) async throws -> String {
         creates += 1
+        onCreate?()
         if let createError { throw createError }
         memo = FlomoMemo(id: "test", content: content, updatedAt: "v1")
         return "test"
@@ -53,6 +55,93 @@ final class FlomoSyncTests: XCTestCase {
             folders = []
         }
         super.tearDown()
+    }
+
+    func testDisabledExtensionStopsQueuedRequestsAndRejectsDeferredConnect() async throws {
+        let (sync, url) = try make()
+        let client = FakeFlomo()
+        sync.readLocal = { "Local change" }
+        sync.start(client: client)
+        sync.stop()
+        sync.localChanged()
+        sync.request()
+        await sync.connect(client: client, memoID: "other")
+        await sync.synchronize()
+        XCTAssertEqual(client.fetches, 0)
+        XCTAssertEqual(client.creates, 0)
+        XCTAssertEqual(client.updates, 0)
+        XCTAssertTrue(try FlomoSync(stateURL: url).record.enabled)
+        XCTAssertEqual(sync.record.memoID, "test")
+        sync.allowConnections()
+        sync.start(client: client)
+        sync.resume()
+        await sync.synchronize()
+        XCTAssertEqual(client.updates, 1)
+        sync.stop()
+    }
+
+    func testDisableDuringCreateKeepsReturnedIDWithoutFurtherRequests() async throws {
+        let (sync, url) = try make(SyncRecord(enabled: true))
+        let client = FakeFlomo()
+        sync.readLocal = { "One new note" }
+        client.onCreate = { sync.stop() }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(client.creates, 1)
+        XCTAssertEqual(client.fetches, 0)
+        XCTAssertEqual(sync.record.memoID, "test")
+        XCTAssertTrue(sync.record.enabled)
+        XCTAssertFalse(sync.record.creationUncertain)
+        XCTAssertEqual(try FlomoSync(stateURL: url).record.memoID, "test")
+        client.onCreate = nil
+        sync.allowConnections()
+        sync.start(client: client)
+        sync.resume()
+        await sync.synchronize()
+        XCTAssertEqual(client.creates, 1)
+        XCTAssertGreaterThan(client.fetches, 0)
+        sync.stop()
+    }
+
+    func testDisableDuringUpdateKeepsWriteIntentWithoutVerificationRequest() async throws {
+        let (sync, url) = try make()
+        let client = FakeFlomo()
+        sync.readLocal = { "New local text" }
+        client.onUpdate = { sync.stop() }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(client.updates, 1)
+        XCTAssertEqual(client.fetches, 1) // Pre-write comparison only, no new GET after disabling.
+        XCTAssertEqual(sync.record.pendingWrite, "New local text")
+        XCTAssertEqual(sync.record.baseline, "Base")
+        XCTAssertNil(sync.record.lastVerifiedAt)
+        XCTAssertEqual(try FlomoSync(stateURL: url).record.pendingWrite, "New local text")
+        client.onUpdate = nil
+        sync.allowConnections()
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(client.updates, 1) // Reconcile the earlier write without sending it twice.
+        XCTAssertEqual(sync.record.baseline, "New local text")
+        XCTAssertNil(sync.record.pendingWrite)
+        sync.stop()
+    }
+
+    func testErrorDetailsRefreshWhenLanguageChanges() async throws {
+        let original = L10n.language
+        defer { L10n.language = original }
+        let (sync, _) = try make()
+        let client = FakeFlomo()
+        client.fetchError = FlomoClientError.authentication
+        sync.readLocal = { "Base" }
+        L10n.language = .chinese
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertTrue(sync.status.contains("授权失败"))
+        L10n.language = .english
+        sync.refreshLanguage()
+        XCTAssertTrue(sync.status.contains("authorization failed"))
+        XCTAssertFalse(sync.status.contains("授权失败"))
+        sync.stop()
     }
 
     func testLocalPushVerifiesReadbackAndPersistsBaseline() async throws {

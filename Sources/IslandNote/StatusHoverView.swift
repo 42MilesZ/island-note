@@ -19,7 +19,7 @@ final class StatusIndicatorButton: NSButton {
 
 /// In-panel overlay: never competes with the island's high window level.
 final class StatusHoverView: NSView {
-    let label = NSTextField(labelWithString: "Saved · Synced")
+    let label = NSTextField(labelWithString: L10n.tr("Saved · Synced"))
 
     override init(frame: NSRect) {
         super.init(frame: frame)

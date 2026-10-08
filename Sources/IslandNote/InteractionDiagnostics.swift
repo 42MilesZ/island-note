@@ -14,30 +14,30 @@ enum InteractionDiagnosticReason: String, Codable {
 
     var explanation: String {
         switch self {
-        case .enabled: return "本机诊断已开启。"
-        case .disabled: return "本机诊断已关闭，停止收集新事件。"
-        case .wrongWindow: return "缩放事件没有投递到笔记面板。"
-        case .panelClosed: return "面板处于收起状态，未执行缩放。"
-        case .outsidePanel: return "手势起点位于面板外，未接管缩放。"
-        case .headerDragging: return "正在按住拖拽栏，此时不执行双指缩放。"
-        case .edgeResizing: return "正在拖动边缘，此时不执行双指缩放。"
-        case .belowThreshold: return "本次缩放幅度尚未达到触发阈值。"
-        case .gestureAlreadyHandled: return "这一轮手势已处理过，抬起手指后可开始下一轮。"
-        case .presetLimit: return "已到当前预设的最大或最小档位。"
-        case .sizeLimit: return "尺寸已到屏幕或面板的上下限。"
-        case .gestureCancelled: return "系统取消了这轮手势。"
-        case .invalidGesture: return "系统提供了无效的缩放数值。"
-        case .resizeRequested: return "已接收缩放并开始调整尺寸。"
-        case .resizeQueued: return "正在吸附回岛，缩放将在回岛后执行。"
-        case .resizeCompleted: return "尺寸动画已完成，实际尺寸到达目标。"
-        case .resizeInterrupted: return "尺寸动画被新的交互打断。"
-        case .resizeStalled: return "疑似异常：动画结束后的尺寸没有到达目标。"
-        case .gestureInterrupted: return "上一轮手势没有收到结束事件，已由新手势重置。"
-        case .noGestureEvents: return "最近一分钟未收到缩放事件，需要检查系统手势投递或确认问题发生的时间。"
-        case .continuousResizeBegan: return "面板开始随双指幅度连续调整尺寸。"
-        case .continuousResizeFinished: return "连续缩放结束，已保留对应状态的尺寸。"
-        case .resizeHoverChanged: return "指针进入、离开或切换了缩放提示区；区域记录在 resizeHoverEdges 中。"
-        default: return "已记录交互状态。"
+        case .enabled: return L10n.tr("Local diagnostics are on.")
+        case .disabled: return L10n.tr("Local diagnostics are off. No new events are recorded.")
+        case .wrongWindow: return L10n.tr("The resize event was not delivered to the note panel.")
+        case .panelClosed: return L10n.tr("The panel was collapsed, so resizing was not performed.")
+        case .outsidePanel: return L10n.tr("The gesture started outside the panel.")
+        case .headerDragging: return L10n.tr("The drag strip owns the interaction, so pinch resizing is paused.")
+        case .edgeResizing: return L10n.tr("An edge resize owns the interaction, so pinch resizing is paused.")
+        case .belowThreshold: return L10n.tr("The legacy resize threshold was not reached.")
+        case .gestureAlreadyHandled: return L10n.tr("The legacy gesture had already been handled.")
+        case .presetLimit: return L10n.tr("The legacy preset limit was reached.")
+        case .sizeLimit: return L10n.tr("The screen or panel size limit was reached.")
+        case .gestureCancelled: return L10n.tr("The system cancelled the gesture.")
+        case .invalidGesture: return L10n.tr("The system provided an invalid magnification value.")
+        case .resizeRequested: return L10n.tr("Resizing was accepted and started.")
+        case .resizeQueued: return L10n.tr("The panel is docking; resizing is queued until arrival.")
+        case .resizeCompleted: return L10n.tr("The resize animation reached its target.")
+        case .resizeInterrupted: return L10n.tr("A new interaction interrupted the resize animation.")
+        case .resizeStalled: return L10n.tr("Possible issue: the resize animation ended without reaching its target.")
+        case .gestureInterrupted: return L10n.tr("A new gesture reset the previous unfinished gesture.")
+        case .noGestureEvents: return L10n.tr("No resize events were received in the last minute. Check gesture delivery or the time of the issue.")
+        case .continuousResizeBegan: return L10n.tr("The panel started continuous pinch resizing.")
+        case .continuousResizeFinished: return L10n.tr("Continuous resizing ended; the size was retained for this layout.")
+        case .resizeHoverChanged: return L10n.tr("The pointer entered, left or changed the resize area, recorded in resizeHoverEdges.")
+        default: return L10n.tr("The interaction state was recorded.")
         }
     }
 }
@@ -136,12 +136,12 @@ final class InteractionDiagnostics {
         let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "development"
         let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "development"
         let evidence = events.filter { ![.pinchReceived, .gestureAlreadyHandled, .gestureFinished, .headerGrabbed, .headerReleased, .checkpoint].contains($0.reason) }.suffix(12)
-        var lines = ["# Island Note 本机交互诊断", "", "版本：\(version) (\(build))；交互诊断格式：1", "系统：\(ProcessInfo.processInfo.operatingSystemVersionString)",
-                     "生成时间：\(Date().ISO8601Format())", "", "仅保存在本机，未上传。无笔记正文、文件名、账号或截图。高频手势增量最多每 0.1 秒采样一次；阶段变化与处理决定保留。", "",
-                     "## 自动判断", "", "以下是交互状态的规则判断，不代表已经确认所有 bug 的根因。"]
-        if evidence.isEmpty { lines.append("尚无可分析的交互事件。开启诊断后重现问题，再记录一次异常。") }
+        var lines = ["# Island Note · " + L10n.tr("Local Diagnostic Report"), "", L10n.format("Version: %@ (%@); diagnostic format: 1", version, build), L10n.tr("System: ") + ProcessInfo.processInfo.operatingSystemVersionString,
+                     L10n.tr("Generated: ") + Date().ISO8601Format(), "", L10n.tr("Saved locally, without note text, file names, accounts or screenshots. Gesture deltas are sampled at most every 0.1 seconds; phases and decisions are retained."), "",
+                     L10n.tr("## Automatic Findings"), "", L10n.tr("These findings use interaction rules and may not identify every cause.")]
+        if evidence.isEmpty { lines.append(L10n.tr("No interaction events are available. Turn on diagnostics, reproduce the problem, then export a report.")) }
         for event in evidence { lines.append("- \(event.time.ISO8601Format()) · \(event.reason.explanation)") }
-        lines += ["", "## 最近交互", "", "| 时间 | 状态 | 面板尺寸 | 浮动 / 拖拽 / 回岛 / 动画 |", "| --- | --- | --- | --- |"]
+        lines += ["", L10n.tr("## Recent Interactions"), "", L10n.tr("| Time | State | Panel Size | Floating / Dragging / Docking / Animating |"), "| --- | --- | --- | --- |"]
         for event in events.suffix(40) {
             let s = event.state
             lines.append("| \(event.time.ISO8601Format()) | \(event.reason.rawValue) | \(Int(s.width)) × \(Int(s.height)) | \(s.floating) / \(s.dragging) / \(s.docking) / \(s.animating) |")
@@ -168,6 +168,21 @@ final class InteractionDiagnostics {
                   event.state.width.isFinite, event.state.height.isFinite,
                   (0...100_000).contains(event.state.width), (0...100_000).contains(event.state.height) else { return nil }
             return event
+        }
+    }
+
+    func clear() {
+        saveTimer?.invalidate(); saveTimer = nil
+        writer.sync {}
+        events.removeAll()
+        lastPinchReceipt = .distantPast
+        guard let directory else { return }
+        for name in ["events.jsonl", "latest-report.md"] {
+            let url = directory.appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: url.path) {
+                do { try FileManager.default.removeItem(at: url) }
+                catch { logger.error("Diagnostic clear failed: \(error.localizedDescription, privacy: .private)") }
+            }
         }
     }
 

@@ -11,14 +11,13 @@ enum FlomoSettings {
         var draftID = sync.record.memoID ?? ""
         while true {
             let alert = NSAlert()
-            alert.messageText = "Flomo Sync"
-            alert.informativeText = "\(sync.status)\n\nConnect with a Flomo MAX personal token. Island Note keeps it in Keychain. Use Find Existing Memo to search by text. Leave the memo field empty only when creating a new note."
-            alert.addButton(withTitle: "Connect")
-            alert.addButton(withTitle: "Cancel")
-            alert.addButton(withTitle: sync.record.enabled ? "Pause Sync" : "Resume Sync")
-            alert.addButton(withTitle: "Get Token")
-            alert.addButton(withTitle: "Sync Now")
-            alert.addButton(withTitle: "Find Existing Memo…")
+            alert.messageText = L10n.tr("Flomo Sync")
+            alert.informativeText = sync.status + "\n\n" + L10n.tr("Connect with a Flomo MAX personal token. Island Note keeps it in Keychain. Use Find Existing Memo to search by text. Leave the memo field empty only when creating a new note.")
+            alert.addButton(withTitle: L10n.tr("Connect"))
+            alert.addButton(withTitle: L10n.tr("Cancel"))
+            alert.addButton(withTitle: sync.record.enabled ? L10n.tr("Pause Sync") : L10n.tr("Resume Sync"))
+            alert.buttons[2].isEnabled = sync.record.memoID != nil && !sync.record.creationUncertain
+            let controls = SecondaryActions()
 
             let stack = NSStackView()
             stack.orientation = .vertical
@@ -26,24 +25,31 @@ enum FlomoSettings {
             stack.spacing = 8
             let token = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 390, height: 24))
             token.stringValue = draftToken
-            token.placeholderString = "Personal token (blank keeps the saved token)"
-            token.setAccessibilityLabel("Flomo personal token")
+            token.placeholderString = L10n.tr("Personal token (blank keeps the saved token)")
+            token.setAccessibilityLabel(L10n.tr("Flomo personal token"))
             let memo = NSTextField(frame: NSRect(x: 0, y: 0, width: 390, height: 24))
-            memo.placeholderString = "Existing Flomo memo URL or ID (optional)"
+            memo.placeholderString = L10n.tr("Existing Flomo memo URL or ID (optional)")
             memo.stringValue = draftID
-            memo.setAccessibilityLabel("Flomo memo URL or ID")
+            memo.setAccessibilityLabel(L10n.tr("Flomo memo URL or ID"))
             stack.addArrangedSubview(token)
             stack.addArrangedSubview(memo)
-            stack.frame.size = NSSize(width: 390, height: 60)
+            let search = NSButton(title: L10n.tr("Find Existing Memo…"), target: controls, action: #selector(SecondaryActions.findMemo))
+            stack.addArrangedSubview(search)
+            let tokenHelp = NSButton(title: L10n.tr("Get Token"), target: controls, action: #selector(SecondaryActions.getToken))
+            let syncNow = NSButton(title: L10n.tr("Sync Now"), target: controls, action: #selector(SecondaryActions.syncNow))
+            syncNow.isEnabled = sync.record.enabled && sync.record.memoID != nil
+            let secondary = NSStackView(views: [tokenHelp, syncNow]); secondary.spacing = 12
+            stack.addArrangedSubview(secondary)
+            stack.frame.size = NSSize(width: 390, height: 136)
             alert.accessoryView = stack
             NSApp.activate(ignoringOtherApps: true)
-            let response = alert.runModal()
+            let response = withExtendedLifetime(controls) { alert.runModal() }
             switch response {
             case .alertFirstButtonReturn:
                 do {
                     let entered = token.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard let credential = entered.isEmpty ? try FlomoCredential.load() : entered, !credential.isEmpty else {
-                        error("Enter a Flomo personal token first."); return
+                        error(L10n.tr("Enter a Flomo personal token first.")); return
                     }
                     let id = try memoID(from: memo.stringValue)
                     if !entered.isEmpty { try FlomoCredential.save(credential) }
@@ -53,6 +59,8 @@ enum FlomoSettings {
                 if sync.record.enabled { sync.pause() } else { sync.resume() }
             case NSApplication.ModalResponse(rawValue: 1003):
                 NSWorkspace.shared.open(URL(string: "https://help.flomoapp.com/advance/mcp/token.html")!)
+                draftToken = token.stringValue; draftID = memo.stringValue
+                continue
             case NSApplication.ModalResponse(rawValue: 1004):
                 sync.request()
             case NSApplication.ModalResponse(rawValue: 1005):
@@ -61,7 +69,7 @@ enum FlomoSettings {
                     draftID = memo.stringValue
                     let entered = draftToken.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard let credential = entered.isEmpty ? try FlomoCredential.load() : entered, !credential.isEmpty else {
-                        error("Enter your personal token to search your Flomo memos."); continue
+                        error(L10n.tr("Enter your personal token to search your Flomo memos.")); continue
                     }
                     let picker = FlomoMemoPicker(client: FlomoClient(token: credential))
                     if let selected = picker.run() { draftID = selected.id }
@@ -71,6 +79,12 @@ enum FlomoSettings {
             }
             return
         }
+    }
+
+    private final class SecondaryActions: NSObject {
+        @objc func findMemo() { NSApp.stopModal(withCode: NSApplication.ModalResponse(rawValue: 1005)) }
+        @objc func getToken() { NSApp.stopModal(withCode: NSApplication.ModalResponse(rawValue: 1003)) }
+        @objc func syncNow() { NSApp.stopModal(withCode: NSApplication.ModalResponse(rawValue: 1004)) }
     }
 
     static func memoID(from input: String) throws -> String? {
@@ -89,13 +103,13 @@ enum FlomoSettings {
 
     private static func review(_ conflict: SyncConflict, sync: FlomoSync) {
         let alert = NSAlert()
-        alert.messageText = sync.phase == .mergeRequired ? "Merge your two notes" : "Review sync differences"
-        alert.informativeText = sync.status + "\n\nMerge Both keeps the Island Note text followed by the Flomo text in one document and the same memo. Both originals are backed up locally. If either copy changes during review, Island Note will ask you to review again."
-        alert.addButton(withTitle: "Use Island Note")
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Use Flomo")
-        alert.addButton(withTitle: "Pause Sync")
-        alert.addButton(withTitle: "Merge Both").isEnabled = sync.record.pendingWrite == nil
+        alert.messageText = sync.phase == .mergeRequired ? L10n.tr("Merge your two notes") : L10n.tr("Review sync differences")
+        alert.informativeText = sync.status + L10n.tr("\n\nMerge Both keeps the Island Note text followed by the Flomo text in one document and the same memo. Both originals are backed up locally. If either copy changes during review, Island Note will ask you to review again.")
+        alert.addButton(withTitle: L10n.tr("Use Island Note"))
+        alert.addButton(withTitle: L10n.tr("Cancel"))
+        alert.addButton(withTitle: L10n.tr("Use Flomo"))
+        alert.addButton(withTitle: L10n.tr("Pause Sync"))
+        alert.addButton(withTitle: L10n.tr("Merge Both")).isEnabled = sync.record.pendingWrite == nil
         let stack = NSStackView()
         stack.orientation = .horizontal
         stack.spacing = 12
@@ -136,13 +150,13 @@ enum FlomoSettings {
 
     static func error(_ message: String) {
         let alert = NSAlert()
-        alert.messageText = "Flomo Sync"
+        alert.messageText = L10n.tr("Flomo Sync")
         alert.informativeText = message
         alert.runModal()
     }
 
     private enum SettingsError: LocalizedError {
         case invalidID
-        var errorDescription: String? { "Enter a valid Flomo memo URL or ID." }
+        var errorDescription: String? { L10n.tr("Enter a valid Flomo memo URL or ID.") }
     }
 }

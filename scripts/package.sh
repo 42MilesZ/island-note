@@ -22,9 +22,12 @@ app="$staging/IslandNote.app"
 output="$PWD/IslandNote.app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" .build/AppIcon.iconset
 cp "$bin_dir/IslandNote" "$app/Contents/MacOS/IslandNote"
+cp -R "$bin_dir/IslandNote_IslandNote.bundle" "$app/Contents/Resources/"
+cp Resources/ThirdPartyNotices.txt "$app/Contents/Resources/"
+cp Resources/PrivacyInfo.xcprivacy "$app/Contents/Resources/"
 cp Resources/Info.plist "$app/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${APP_VERSION:-0.2.0}" "$app/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER:-2}" "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${APP_VERSION:-1.0}" "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${BUILD_NUMBER:-4}" "$app/Contents/Info.plist"
 swift scripts/make-icon.swift .build/AppIcon.iconset
 iconutil -c icns .build/AppIcon.iconset -o "$app/Contents/Resources/AppIcon.icns"
 if [[ "$identity" == "-" ]]; then

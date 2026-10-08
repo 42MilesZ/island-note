@@ -12,8 +12,12 @@ final class PanelDragView: NSView {
         wantsLayer = true
         layer?.cornerRadius = 8
         layer?.backgroundColor = NSColor.clear.cgColor
-        setAccessibilityLabel("Drag panel")
-        setAccessibilityHelp("Drag away to float. Move back to the island and release to dock. Escape docks and collapses.")
+        refreshLocalizedUI()
+    }
+
+    func refreshLocalizedUI() {
+        setAccessibilityLabel(L10n.tr("Drag panel"))
+        setAccessibilityHelp(L10n.tr("Drag away to float. Move back to the island and release to dock. Escape docks and collapses."))
     }
 
     @available(*, unavailable)

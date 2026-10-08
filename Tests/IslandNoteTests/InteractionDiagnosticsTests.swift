@@ -52,7 +52,7 @@ final class InteractionDiagnosticsTests: XCTestCase {
         XCTAssertEqual(diagnostics.events.last?.reason, .checkpoint)
         XCTAssertTrue(diagnostics.report.contains(InteractionDiagnosticReason.invalidGesture.explanation))
         diagnostics.record(.resizeStalled, state: state)
-        XCTAssertTrue(diagnostics.recentFindings.contains("疑似异常"))
+        XCTAssertTrue(diagnostics.recentFindings.contains(InteractionDiagnosticReason.resizeStalled.explanation))
     }
 
     func testUnexpectedlyLargeHistoryIsNotLoadedOrModified() throws {

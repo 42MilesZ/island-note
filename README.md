@@ -12,15 +12,25 @@ Both docked and floating panels resize continuously: each native magnification d
 
 Pinches received during a return to the island accumulate continuously against the docked size and follow the same damped curve after arrival, including when the gesture continues across arrival. During opening, the editor's full footprint accepts a pinch even while its contour is still expanding. A held header or edge resize temporarily owns the interaction; the next pinch is accepted after release.
 
-## Local interaction diagnostics
+## Settings and privacy
 
-Right-click the island or panel → **开发者诊断（本机）** → **自动收集交互诊断**. Collection is off by default and the setting survives restarts. When enabled, the app automatically records gesture phases, sampled magnification deltas, panel dimensions, focus and interaction states, and resize outcomes. It explains rejected gestures, size/display limits, queued docking gestures, interruptions and a target-size mismatch. These are rule-based clues; they do not detect every bug or run a background AI agent.
+Open **Settings…** from the island or editor's context menu, or press **⌘,**.
+The panel retracts while settings or the policy is open so its floating level cannot hide those windows.
+Flomo and local diagnostics are independent opt-in features, both off by default.
+The interface follows the system language, with English and Simplified Chinese available in Settings;
+changing language preserves note contents, selection and undo history.
+**Privacy Policy** shows the complete policy bundled with the app, including while offline.
+The public policy is in [docs/privacy-policy.md](docs/privacy-policy.md).
 
-The most recent 300 records persist across restarts in `~/Library/Application Support/IslandNote/Diagnostics/events.jsonl`; `latest-report.md` contains the automatic findings and recent state timeline. In the sandboxed TestFlight app, this directory is inside its Application Support container. High-frequency changed events are sampled at most every 0.1 seconds; lifecycle events and decisions are retained. Disk writes are batched off the UI thread, the directory is private to the current user, and the files are limited to 300 records. No note text, note paths, screenshots, credentials, account data or other-app activity is collected or uploaded. Turning the switch off stops new collection and keeps existing records.
+Turn on **Record Local Diagnostics**, reproduce an issue, then **Export Report…**.
+**Clear Records** removes only the app's diagnostic files. Turning collection off retains prior records.
+Reports contain event phases, sampled magnification, dimensions, focus/interaction states and app/system versions;
+they exclude note text, file names, account details, credentials and screenshots. Nothing is uploaded automatically.
+The most recent 300 events stay in the app's Application Support `IslandNote/Diagnostics/` directory
+(inside the container for the sandboxed store app). Writes are batched off the UI thread;
+changed magnification is sampled at most every 0.1 seconds, with lifecycle events and decisions retained.
+Exported copies remain at the location you choose. Findings are interaction rules and may not identify every cause.
 
-Use **记录刚才的交互异常** to mark a reproducible failure, or **查看诊断报告…** to open the report directory. On a later bug report, the local diagnostic files can be read directly without requiring a screenshot or note contents. If no magnification event was received in the preceding minute, the marker reports that gap rather than inventing a gesture failure.
-
-Notes with three or more Markdown headings show a small outline in the left margin. Bar lengths reflect heading levels, and the current section is highlighted as you scroll. Hover a bar to preview its title with a light haptic tick; click to scroll smoothly to that section without moving the text selection or adding another haptic pulse. Below three headings, the outline is hidden and does not respond to hovering. Longer outlines can scroll independently, and Reduce Motion is respected.
 
 ## Run
 
@@ -34,9 +44,9 @@ make run
 
 ## Flomo sync
 
-Click the top-right status dot, open **Flomo Sync…** in the app/context menu, or press **⌘,** while editing. Enter your [Flomo MAX personal token](https://help.flomoapp.com/advance/mcp/token.html) in the secure field. The token stays in macOS Keychain, separate from Codex's connector. To link an existing memo, choose **Find Existing Memo…**, search for words from its text, select a preview, then click Connect. Search reads at most 50 previews; sync fetches the complete selected memo before comparing or writing. No memo URL or ID is required. You can still paste one directly. Leave the memo field empty only to create a new dedicated memo. Connecting an unequal existing memo shows both complete versions. **Merge Both** preserves the local text followed by the Flomo text in one document, backs up both originals, and updates that same memo. It never creates a second memo. Merges over the size limit are blocked.
+In **Settings…**, enable **Flomo Sync**, review the data-use notice, then choose **Configure Flomo…**. The top-right dot opens Settings or takes you directly to a sync issue that needs review. **Flomo Sync…** appears in context menus only while the extension is enabled. Enter your [Flomo MAX personal token](https://help.flomoapp.com/advance/mcp/token.html) in the secure field. The token stays in macOS Keychain. To link an existing memo, choose **Find Existing Memo…**, search for words from its text, select a preview, then click Connect. Search reads at most 50 previews; sync fetches the complete selected memo before comparing or writing. No memo URL or ID is required. You can still paste one directly. Leave the memo field empty only to create a new dedicated memo. Connecting an unequal existing memo shows both complete versions. **Merge Both** preserves the local text followed by the Flomo text in one document, backs up both originals, and updates that same memo. It never creates a second memo. Merges over the size limit are blocked.
 
-Island Note sends saved edits after 3 seconds of inactivity and checks Flomo every 60 seconds while the app runs, and whenever the panel opens. Changes on either side sync automatically when only one copy has changed since the last verified sync. A single small dot in the top-right combines local saves and Flomo sync: a brief green pulse after a local save, a gentle neutral pulse while syncing, quiet gray at rest, amber when sync needs attention, and red if local saving fails. Local save errors take priority, and a save pulse never hides a sync warning. Hover shows a compact one-line card inside the panel (for example, Saved · Synced), above its content. Click opens the full explanation, last verified time, and actions. State changes respect Reduce Motion. Synced appears only after verification and never while a newer local edit is pending. If both copies changed, click the status to review them. Pause/resume and Sync Now are available in settings. Closing the app stops synchronization; the local file still saves immediately.
+Island Note sends saved edits after 3 seconds of inactivity and checks Flomo every 60 seconds while the app runs, and whenever the panel opens. Changes on either side sync automatically when only one copy has changed since the last verified sync. A single small dot in the top-right combines local saves and Flomo sync: a brief green pulse after a local save, a gentle neutral pulse while syncing, quiet gray at rest, amber when sync needs attention, and red if local saving fails. Local save errors take priority, and a save pulse never hides a sync warning. Hover shows a compact one-line card inside the panel (for example, Saved · Synced), above its content. Click opens the full explanation, last verified time, and actions. State changes respect Reduce Motion. Synced appears only after verification and never while a newer local edit is pending. If both copies changed, click the status to review them. Pause/resume and Sync Now are available in settings. Disabling the extension stops subsequent HTTP requests and retains the previous automatic-sync or pause preference. An already-issued write may finish; its returned ID and verification intent are retained. Quick re-enabling cannot revive an old handshake. Closing the app stops synchronization; the local file still saves immediately.
 
 The document limit is **30,000 Unicode scalars**. Oversized edits are rejected as a whole, never truncated. Existing larger files remain readable and can be shortened. Flomo needs a small amount of extra room for heading escapes and list spacing near the limit, so a full local document may need shortening to sync.
 
@@ -89,19 +99,21 @@ Built with Swift, AppKit, and [SwiftMarkdownEngine](https://github.com/nodes-app
 universal Apple Silicon / Intel app, exports using App Store Connect signing,
 validates the package, then uploads it. XcodeGen and Xcode 26 are required.
 `ASC_KEY_ID` and `ASC_ISSUER_ID` come from the shell environment; the private key
-stays in `~/.appstoreconnect/private_keys/`. The first beta uses build `3`. Set `BUILD_NUMBER` to a new increasing integer
+stays in `~/.appstoreconnect/private_keys/`. Build `3` was previously uploaded. The current release version is `1.0`, with default build `4`. Set `BUILD_NUMBER` to a new increasing integer
 for subsequent uploads. An App Store Connect app record
 for `local.projects.island-note` must exist before uploading.
 
-This target defines `ISLAND_TESTFLIGHT` and excludes all Flomo networking,
-credentials, settings and sync implementations at compile time. It has App
-Sandbox enabled with **no network or Keychain access entitlements**. Its note is
-stored under the sandbox container's Application Support directory. Existing
-unsandboxed notes and Flomo configuration are not imported. The direct
-distribution build from `make package` retains its existing Flomo support.
+This target defines `ISLAND_APP_STORE`, enables App Sandbox and includes the same optional
+Flomo functionality as direct distribution. Outgoing network access supports the optional
+Flomo connection; selected-file read/write access supports explicit diagnostic exports.
+Default startup does not read a Flomo token or initialize synchronization while its switch is off.
+Notes are stored under the sandbox container's Application Support directory; existing unsandboxed
+notes and sync configuration are not imported. Keychain is used for the personal token after opt-in.
+The privacy manifest declares the app's own preferences and elapsed-time API use, and optional
+user-content/search-history transfer for sync functionality, without tracking.
 
 The same uploaded build is intended for both internal and external testing
 (`testFlightInternalTestingOnly` is false). Upload acceptance, build processing,
 internal testing and external Beta App Review are separate states: check the
-exact uploaded build before reporting availability. Reviewers do not need a
-login or a Flomo token.
+exact uploaded build before reporting availability. The core local-note features do not require a login or a Flomo token. Review notes should
+explain that Flomo is optional and requires the user's own Flomo MAX personal token.

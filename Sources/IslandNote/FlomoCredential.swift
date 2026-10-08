@@ -31,6 +31,6 @@ enum FlomoCredential {
 
     private enum CredentialError: LocalizedError {
         case unavailable
-        var errorDescription: String? { "Could not access the Flomo token in Keychain." }
+        var errorDescription: String? { L10n.tr("Could not access the Flomo token in Keychain.") }
     }
 }

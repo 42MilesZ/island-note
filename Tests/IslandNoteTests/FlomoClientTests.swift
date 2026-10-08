@@ -8,6 +8,53 @@ final class FlomoClientTests: XCTestCase {
         super.tearDown()
     }
 
+    func testDisableBetweenHandshakeRequestsStopsLaterToolCallEvenAfterReenable() async throws {
+        for interruptedMethod in ["initialize", "notifications/initialized"] {
+            var methods: [String] = []
+            let connection = client()
+            let base = fixture(payload: ["id": "new-memo"])
+            StubProtocol.handler = { request in
+                let method = try XCTUnwrap(try requestBody(request)["method"] as? String)
+                methods.append(method)
+                if method == interruptedMethod {
+                    connection.setRequestsEnabled(false)
+                    // A quick re-enable must not revive the old handshake.
+                    connection.setRequestsEnabled(true)
+                }
+                return try base(request)
+            }
+            do {
+                _ = try await connection.create(content: "Only a fixture")
+                XCTFail("The old handshake must not issue a write")
+            } catch let error as FlomoClientError {
+                XCTAssertEqual(error, .cancelledBeforeWrite)
+            }
+            XCTAssertFalse(methods.contains("tools/call"))
+            XCTAssertEqual(methods.count, interruptedMethod == "initialize" ? 1 : 2)
+        }
+    }
+
+    func testAlreadyIssuedCreateCanReturnItsIDAfterDisabling() async throws {
+        let connection = client()
+        let base = fixture(payload: ["id": "created-before-disable"])
+        var calls = 0
+        StubProtocol.handler = { request in
+            if try requestBody(request)["method"] as? String == "tools/call" {
+                calls += 1
+                connection.setRequestsEnabled(false)
+            }
+            return try base(request)
+        }
+        let id = try await connection.create(content: "Only a fixture")
+        XCTAssertEqual(id, "created-before-disable")
+        XCTAssertEqual(calls, 1)
+        do {
+            _ = try await connection.fetch(id: id)
+            XCTFail("A disabled connection must not send another request")
+        } catch let error as FlomoClientError { XCTAssertEqual(error, .cancelledBeforeWrite) }
+        XCTAssertEqual(calls, 1)
+    }
+
     func testFetchCompletesHandshakeAndRejectsIncompleteMemo() async throws {
         var methods: [String] = []
         StubProtocol.handler = { request in

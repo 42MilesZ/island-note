@@ -31,7 +31,7 @@ final class IslandPanel: NSPanel {
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
-    var onSyncSettings: (() -> Void)?
+    var onSettings: (() -> Void)?
     var resizeCursorAtPoint: ((NSPoint) -> NSCursor?)?
 
     override func sendEvent(_ event: NSEvent) {
@@ -76,7 +76,7 @@ final class IslandPanel: NSPanel {
             }
             return true
         case ",":
-            onSyncSettings?()
+            onSettings?()
             return true
         case "q":
             NSApp.terminate(nil)
@@ -91,9 +91,10 @@ final class IslandPanel: NSPanel {
 @MainActor
 final class IslandNoteController: NSObject {
     private let store: NoteStore
-    #if !ISLAND_TESTFLIGHT
     private var sync: FlomoSync?
-    #endif
+    private let preferences: AppPreferences
+    private let canEnableSync: Bool
+    private var settingsWindow: SettingsWindowController?
     private var showingSyncSettings = false
 
     // 窗口与岛体
@@ -162,44 +163,46 @@ final class IslandNoteController: NSObject {
     private var finishingCollapse = false
     private var monitors: [Any] = []
 
-    init(store: NoteStore, enableSync: Bool = true, diagnostics: InteractionDiagnostics? = nil) {
+    init(store: NoteStore, enableSync: Bool = true, diagnostics: InteractionDiagnostics? = nil, preferences: AppPreferences? = nil) {
         self.store = store
+        self.preferences = preferences ?? (enableSync ? .shared : AppPreferences(defaults: nil))
+        self.canEnableSync = enableSync
         self.diagnostics = diagnostics ?? (enableSync ? .shared : InteractionDiagnostics(defaults: nil, enabled: false))
         super.init()
         installMainMenu()
         setup()
         bindStore()
         self.diagnostics.record(.checkpoint, state: diagnosticState())
-        #if !ISLAND_TESTFLIGHT
-        if enableSync { setupSync() }
-        #endif
-    }
+        if enableSync, self.preferences.flomoEnabled { setupSync() }
+        }
 
     /// 主菜单 Edit：让 ⌘C/V/X/A/Z 走标准 responder，少一层拦截。
     private func installMainMenu() {
         let main = NSMenu()
         let editItem = NSMenuItem()
-        let edit = NSMenu(title: "Edit")
-        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
-        let redo = NSMenuItem(title: "Redo", action: Selector(("redo:")), keyEquivalent: "z")
+        let edit = NSMenu(title: L10n.tr("Edit"))
+        edit.addItem(withTitle: L10n.tr("Undo"), action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = NSMenuItem(title: L10n.tr("Redo"), action: Selector(("redo:")), keyEquivalent: "z")
         redo.keyEquivalentModifierMask = [.command, .shift]
         edit.addItem(redo)
         edit.addItem(.separator())
-        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.addItem(withTitle: L10n.tr("Cut"), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: L10n.tr("Copy"), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: L10n.tr("Paste"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: L10n.tr("Select All"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editItem.submenu = edit
         main.addItem(editItem)
 
         let appItem = NSMenuItem()
         let appMenu = NSMenu(title: "Island Note")
-        #if !ISLAND_TESTFLIGHT
-        let syncItem = NSMenuItem(title: "Flomo Sync…", action: #selector(showSyncSettings), keyEquivalent: ",")
-        syncItem.target = self
-        appMenu.addItem(syncItem)
-        #endif
-        let quit = NSMenuItem(title: "Quit Island Note", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let settings = NSMenuItem(title: L10n.tr("Settings…"), action: #selector(showSettings), keyEquivalent: ",")
+        settings.target = self
+        appMenu.addItem(settings)
+        let privacy = NSMenuItem(title: L10n.tr("Privacy Policy"), action: #selector(showPrivacyPolicy), keyEquivalent: "")
+        privacy.target = self
+        appMenu.addItem(privacy)
+        appMenu.addItem(.separator())
+        let quit = NSMenuItem(title: L10n.tr("Quit Island Note"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appMenu.addItem(quit)
         appItem.submenu = appMenu
         main.addItem(appItem)
@@ -285,10 +288,8 @@ final class IslandNoteController: NSObject {
             backing: .buffered,
             defer: false
         )
-        #if !ISLAND_TESTFLIGHT
-        panel.onSyncSettings = { [weak self] in self?.showSyncSettings() }
-        #endif
-        panel.level = .screenSaver
+        panel.onSettings = { [weak self] in self?.showSettings() }
+            panel.level = .screenSaver
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
@@ -321,7 +322,7 @@ final class IslandNoteController: NSObject {
         island.hitRect = restRect
         island.setAccessibilityElement(true)
         island.setAccessibilityRole(.button)
-        island.setAccessibilityLabel("Open Island Note")
+        island.setAccessibilityLabel(L10n.tr("Open Island Note"))
         island.onAccessibilityPress = { [weak self] in self?.expand() }
 
         editor = NoteEditorView(frame: expandedRect)
@@ -335,10 +336,10 @@ final class IslandNoteController: NSObject {
         editor.onRequestQuit = {
             NSApp.terminate(nil)
         }
-        #if !ISLAND_TESTFLIGHT
-        editor.onRequestSync = { [weak self] in self?.showSyncSettings() }
-        #endif
-        // 编辑器只覆盖可见形状（expandedRect）：底边 = 遮罩底边，
+            editor.onRequestSync = { [weak self] in self?.showSyncSettings() }
+        editor.onRequestSettings = { [weak self] in self?.showSettings() }
+        editor.setFlomoEnabled(preferences.flomoEnabled)
+            // 编辑器只覆盖可见形状（expandedRect）：底边 = 遮罩底边，
         // 原先铺满全窗口时底部 16px gutter 成了「滚得到但永远看不见」的死区。
         editor.frame = expandedRect
         editor.isHidden = true
@@ -422,7 +423,7 @@ final class IslandNoteController: NSObject {
             editor.setEditingEnabled(true)
         } catch {
             editor.setEditingEnabled(false)
-            editor.showSaveError("Could not open \(store.path): \(error.localizedDescription)")
+            editor.showSaveError(L10n.format("Could not open %@: %@", store.path, error.localizedDescription))
         }
     }
 
@@ -789,7 +790,7 @@ final class IslandNoteController: NSObject {
     // MARK: - 悬停 / 点击
 
     private func handleHover(_ event: NSEvent? = nil) {
-        guard !showingSyncSettings, !dragInteraction.preventsCollapse else { return }
+        guard !showingSyncSettings, !PrivacyPolicyWindow.isVisible, !dragInteraction.preventsCollapse else { return }
         // Shrinking can move the edge past a stationary pointer. Wait for the
         // gesture/animation to finish before accepting a new hover-exit movement.
         guard !isPinching, resizeTimer == nil else { return }
@@ -847,42 +848,25 @@ final class IslandNoteController: NSObject {
         guard inIsland else { return }
 
         let menu = NSMenu()
-        let diagnosticsItem = NSMenuItem(title: "开发者诊断（本机）", action: nil, keyEquivalent: "")
-        let diagnosticsMenu = NSMenu()
-        diagnosticsMenu.autoenablesItems = false
-        let toggle = NSMenuItem(title: "自动收集交互诊断", action: #selector(toggleDiagnostics), keyEquivalent: "")
-        toggle.state = diagnostics.isEnabled ? .on : .off
-        toggle.target = self
-        diagnosticsMenu.addItem(toggle)
-        let mark = NSMenuItem(title: "记录刚才的交互异常", action: #selector(markInteractionProblem), keyEquivalent: "")
-        mark.target = self
-        mark.isEnabled = diagnostics.isEnabled
-        diagnosticsMenu.addItem(mark)
-        let report = NSMenuItem(title: "查看诊断报告…", action: #selector(showDiagnostics), keyEquivalent: "")
-        report.target = self
-        diagnosticsMenu.addItem(report)
-        diagnosticsItem.submenu = diagnosticsMenu
-        menu.addItem(diagnosticsItem)
-        menu.addItem(.separator())
-        #if !ISLAND_TESTFLIGHT
-        let syncItem = NSMenuItem(title: "Flomo Sync…", action: #selector(showSyncSettings), keyEquivalent: "")
-        syncItem.target = self
-        menu.addItem(syncItem)
-        #endif
-        if mode == .expanded {
-            let collapseItem = NSMenuItem(title: "Collapse", action: #selector(collapseAction), keyEquivalent: "")
-            collapseItem.target = self
-            menu.addItem(collapseItem)
-            menu.addItem(.separator())
+        let settings = NSMenuItem(title: L10n.tr("Settings…"), action: #selector(showSettings), keyEquivalent: ",")
+        settings.target = self
+        menu.addItem(settings)
+        if preferences.flomoEnabled {
+            let syncItem = NSMenuItem(title: L10n.tr("Flomo Sync…"), action: #selector(showSyncSettings), keyEquivalent: "")
+            syncItem.target = self
+            menu.addItem(syncItem)
         }
-        let quit = NSMenuItem(title: "Quit Island Note", action: #selector(quitAction), keyEquivalent: "q")
+        let privacy = NSMenuItem(title: L10n.tr("Privacy Policy"), action: #selector(showPrivacyPolicy), keyEquivalent: "")
+        privacy.target = self
+        menu.addItem(privacy)
+        menu.addItem(.separator())
+        let quit = NSMenuItem(title: L10n.tr("Quit Island Note"), action: #selector(quitAction), keyEquivalent: "q")
         quit.keyEquivalentModifierMask = [.command]
         quit.target = self
         menu.addItem(quit)
         NSMenu.popUpContextMenu(menu, with: e ?? NSEvent(), for: island)
     }
 
-    @objc private func collapseAction() { collapse() }
     private func diagnosticState() -> InteractionDiagnosticState {
         let screen = (panel.screen ?? notchScreen()).visibleFrame
         return InteractionDiagnosticState(mode: String(describing: mode), floating: dragInteraction.isFloating,
@@ -898,29 +882,76 @@ final class IslandNoteController: NSObject {
         diagnostics.setEnabled(!diagnostics.isEnabled, state: diagnosticState())
     }
 
-    @objc func markInteractionProblem() {
-        diagnostics.markProblem(state: diagnosticState())
-        showDiagnostics()
+    @objc func showSettings() {
+        collapse()
+        pendingCollapse?.cancel(); pendingCollapse = nil
+        if settingsWindow == nil {
+            let settings = SettingsWindowController(preferences: preferences, diagnostics: diagnostics)
+            settings.onFlomoToggle = { [weak self] in self?.setFlomoEnabled($0) ?? false }
+            settings.onConfigureFlomo = { [weak self] in self?.showSyncSettings() }
+            settings.onDiagnosticToggle = { [weak self] in self?.toggleDiagnostics() }
+            settings.onExportDiagnostics = { [weak self] in self?.exportDiagnostics() }
+            settings.onClearDiagnostics = { [weak self] in self?.diagnostics.clear() }
+            settings.onLanguageChange = { [weak self] language in
+                guard let self else { return }
+                self.preferences.setLanguage(language)
+                self.installMainMenu()
+                self.island.setAccessibilityLabel(L10n.tr("Open Island Note"))
+                self.editor.refreshLocalizedUI()
+                self.sync?.refreshLanguage()
+            }
+            settings.onPrivacy = { [weak self] in self?.showPrivacyPolicy() }
+            settings.onClose = { [weak self] in self?.showingSyncSettings = false }
+            settingsWindow = settings
+        }
+        showingSyncSettings = true
+        settingsWindow?.rebuild()
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow?.showWindow(nil)
+        settingsWindow?.window?.makeKeyAndOrderFront(nil)
     }
 
-    @objc func showDiagnostics() {
+    @discardableResult
+    func setFlomoEnabled(_ enabled: Bool) -> Bool {
+        guard enabled != preferences.flomoEnabled else { return true }
+        if enabled {
+            let alert = NSAlert()
+            alert.messageText = L10n.tr("Enable Flomo Sync?")
+            alert.informativeText = L10n.tr("After you connect, this note and any memo searches are sent directly to Flomo. Your token stays in Keychain. An existing connection keeps its previous syncing or paused state. Local note-taking works without Flomo.")
+            alert.addButton(withTitle: L10n.tr("Enable Flomo"))
+            alert.addButton(withTitle: L10n.tr("Cancel"))
+            guard alert.runModal() == .alertFirstButtonReturn else { return false }
+        }
+        preferences.setFlomoEnabled(enabled)
+        if enabled {
+            editor.setFlomoEnabled(true)
+            if canEnableSync { setupSync() }
+        } else {
+            sync?.stop()
+            editor.setFlomoEnabled(false)
+        }
+        return true
+    }
+
+    @objc private func showPrivacyPolicy() { collapse(); PrivacyPolicyWindow.show() }
+
+    private func exportDiagnostics() {
         diagnostics.reloadHistoryIfEmpty()
+        if diagnostics.isEnabled { diagnostics.markProblem(state: diagnosticState()) }
         diagnostics.flush()
-        pendingCollapse?.cancel(); pendingCollapse = nil
-        showingSyncSettings = true
-        defer { showingSyncSettings = false }
-        let alert = NSAlert()
-        alert.messageText = "本机交互诊断"
-        let findings = diagnostics.recentFindings
-        alert.informativeText = "\(diagnostics.isEnabled ? "正在收集" : "已关闭收集")。只记录面板尺寸、手势阶段和交互状态，不记录笔记正文或截图，也不上传。关闭后保留已有记录。\n\n\(findings.isEmpty ? "尚无交互记录。开启后重现问题即可自动记录。" : findings)"
-        alert.addButton(withTitle: "完成")
-        let open = alert.addButton(withTitle: "打开报告目录")
-        open.isEnabled = diagnostics.reportURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
-        NSApp.activate(ignoringOtherApps: true)
-        if alert.runModal() == .alertSecondButtonReturn, let url = diagnostics.reportURL {
-            NSWorkspace.shared.activateFileViewerSelecting([url])
+        let save = NSSavePanel()
+        save.nameFieldStringValue = "IslandNote-Diagnostics.md"
+        save.title = L10n.tr("Export Diagnostic Report")
+        guard save.runModal() == .OK, let url = save.url else { return }
+        do { try diagnostics.report.write(to: url, atomically: true, encoding: .utf8) }
+        catch {
+            let alert = NSAlert()
+            alert.messageText = L10n.tr("Report could not be saved")
+            alert.informativeText = error.localizedDescription
+            alert.runModal()
         }
     }
+
     @objc private func quitAction() {
         NSApp.terminate(nil)
     }
@@ -935,13 +966,11 @@ final class IslandNoteController: NSObject {
                 editor.setEditingEnabled(true)
             }
         } catch {
-            editor.showSaveError("Could not read \(store.path): \(error.localizedDescription)")
+            editor.showSaveError(L10n.format("Could not read %@: %@", store.path, error.localizedDescription))
         }
         goTo(.expanded)
-        #if !ISLAND_TESTFLIGHT
-        sync?.request()
-        #endif
-        Haptics.expand()
+        if preferences.flomoEnabled { sync?.request() }
+            Haptics.expand()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKey()
         DispatchQueue.main.async { [weak self] in
@@ -979,14 +1008,23 @@ final class IslandNoteController: NSObject {
         diagnostics.flush()
     }
 
-    #if !ISLAND_TESTFLIGHT
     private func setupSync() {
+        guard preferences.flomoEnabled, canEnableSync else { return }
         do {
+            if let sync {
+                sync.allowConnections()
+                if let token = try FlomoCredential.load() { sync.start(client: FlomoClient(token: token)) }
+                else { editor.showSyncStatus(.disconnected, detail: L10n.tr("Connect your Flomo account in Settings.")) }
+                return
+            }
             let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask,
                                                         appropriateFor: nil, create: true).appendingPathComponent("IslandNote")
             let sync = try FlomoSync(stateURL: directory.appendingPathComponent("flomo-sync.json"))
             self.sync = sync
-            sync.onStatus = { [weak self] phase, detail in self?.editor.showSyncStatus(phase, detail: detail) }
+            sync.onStatus = { [weak self] phase, detail in
+                guard let self, self.preferences.flomoEnabled else { return }
+                self.editor.showSyncStatus(phase, detail: detail)
+            }
             sync.readLocal = { [weak self] in
                 guard let self else { throw SyncFailure.localUnavailable }
                 guard !self.editor.hasMarkedText else { throw SyncFailure.localChanged }
@@ -1006,22 +1044,24 @@ final class IslandNoteController: NSObject {
             store.onSyncNeeded = { [weak sync] in sync?.localChanged() }
             if let token = try FlomoCredential.load() { sync.start(client: FlomoClient(token: token)) }
         } catch {
-            editor.showSyncStatus(.failed, detail: "Flomo setup unavailable: \(error.localizedDescription)")
+            editor.showSyncStatus(.failed, detail: L10n.format("Flomo setup unavailable: %@", error.localizedDescription))
         }
     }
 
     @objc func showSyncSettings() {
-        guard let sync else { FlomoSettings.error("Sync settings could not be loaded. Your local note is still available."); return }
+        guard preferences.flomoEnabled else { showSettings(); return }
+        collapse()
+        guard let sync else { FlomoSettings.error(L10n.tr("Sync settings could not be loaded. Your local note is still available.")); return }
         pendingCollapse?.cancel()
         pendingCollapse = nil
+        let wasShowing = showingSyncSettings
         showingSyncSettings = true
-        defer { showingSyncSettings = false }
+        defer { showingSyncSettings = wasShowing }
         editor.flushPending()
         guard store.flushSync() else { return }
         FlomoSettings.show(sync)
     }
 
-    #endif
 
     /// 只动画遮罩形状（顶边恒定）。expanded 用弹簧回弹。
     private func goTo(_ m: Mode) {
