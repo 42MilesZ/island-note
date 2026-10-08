@@ -34,8 +34,8 @@ enum InteractionDiagnosticReason: String, Codable {
         case .resizeStalled: return "疑似异常：动画结束后的尺寸没有到达目标。"
         case .gestureInterrupted: return "上一轮手势没有收到结束事件，已由新手势重置。"
         case .noGestureEvents: return "最近一分钟未收到缩放事件，需要检查系统手势投递或确认问题发生的时间。"
-        case .continuousResizeBegan: return "悬浮面板开始随双指幅度连续调整尺寸。"
-        case .continuousResizeFinished: return "连续缩放结束，已保留当前悬浮尺寸。"
+        case .continuousResizeBegan: return "面板开始随双指幅度连续调整尺寸。"
+        case .continuousResizeFinished: return "连续缩放结束，已保留对应状态的尺寸。"
         case .resizeHoverChanged: return "指针进入、离开或切换了缩放提示区；区域记录在 resizeHoverEdges 中。"
         default: return "已记录交互状态。"
         }

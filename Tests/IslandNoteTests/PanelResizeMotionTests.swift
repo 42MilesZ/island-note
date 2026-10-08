@@ -2,10 +2,10 @@ import AppKit
 import XCTest
 @testable import IslandNote
 
-final class FloatingResizeMotionTests: XCTestCase {
+final class PanelResizeMotionTests: XCTestCase {
     func testGentleStartSoftLandingAndFrameRateIndependence() {
         let original = NSRect(x: 200, y: 200, width: 420, height: 460)
-        var motion = FloatingResizeMotion(rect: original)
+        var motion = PanelResizeMotion(rect: original)
         motion.target = NSRect(x: 179, y: 177, width: 462, height: 506)
         motion.advance(by: 0.05)
         let first = motion.rect.width - original.width
@@ -21,7 +21,7 @@ final class FloatingResizeMotionTests: XCTestCase {
             XCTAssertLessThanOrEqual(motion.rect.width, motion.target.width)
         }
         XCTAssertTrue(motion.isSettled)
-        var sixty = FloatingResizeMotion(rect: original), oneTwenty = sixty
+        var sixty = PanelResizeMotion(rect: original), oneTwenty = sixty
         sixty.target = motion.target; oneTwenty.target = motion.target
         for _ in 0..<24 { sixty.advance(by: 1 / 60) }
         for _ in 0..<48 { oneTwenty.advance(by: 1 / 120) }
@@ -29,7 +29,7 @@ final class FloatingResizeMotionTests: XCTestCase {
     }
 
     func testRetargetPreservesPositionAndVelocityAndSettlesInReverse() {
-        var motion = FloatingResizeMotion(rect: NSRect(x: 200, y: 200, width: 420, height: 460))
+        var motion = PanelResizeMotion(rect: NSRect(x: 200, y: 200, width: 420, height: 460))
         motion.target = NSRect(x: 179, y: 177, width: 462, height: 506)
         motion.advance(by: 0.1)
         let before = motion.rect

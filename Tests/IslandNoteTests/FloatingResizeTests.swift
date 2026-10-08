@@ -140,7 +140,8 @@ final class FloatingResizeTests: XCTestCase {
             editor.dragHandle.onBegin?(clicked)
             editor.dragHandle.onEnd?(clicked)
             settle()
-            XCTAssertEqual(editor.frame.size, PanelSize.large.dimensions)
+            XCTAssertEqual(editor.frame.width, 506, accuracy: 0.001)
+            XCTAssertEqual(editor.frame.height, 302.5, accuracy: 0.001)
             let start = header(panel, editor)
             let release = NSPoint(x: start.x + 80, y: start.y - 170)
             editor.dragHandle.onBegin?(start)
@@ -163,7 +164,7 @@ final class FloatingResizeTests: XCTestCase {
             XCTAssertEqual(after.maxY - PanelDocking.headerInset, moved.y, accuracy: 1)
             editor.dragHandle.onEnd?(moved)
             settle()
-            XCTAssertEqual(editor.frame.size, PanelSize.large.floatingDimensions)
+            XCTAssertEqual(editor.frame.size, PanelSize.standard.floatingDimensions)
         }
     }
 
@@ -182,13 +183,18 @@ final class FloatingResizeTests: XCTestCase {
             editor.dragHandle.onEnd?(dockPoint)
             pinch(controller, editor: editor, delta: 0.1)
             XCTAssertTrue(diagnostics.events.contains { $0.reason == .resizeQueued && $0.state.docking })
-            settle(0.8)
+            // Arrival precedes the damped resize tail; allow both to settle.
+            settle(1.1)
             XCTAssertEqual(panel.level, .screenSaver)
-            XCTAssertEqual(editor.frame.size, PanelSize.large.dimensions)
-            XCTAssertTrue(diagnostics.events.contains { $0.reason == .resizeCompleted && $0.state.width == 690 })
-            // An endpoint no-op and a rejected origin leave different evidence.
+            XCTAssertEqual(editor.frame.width, 506, accuracy: 0.001)
+            XCTAssertEqual(editor.frame.height, 302.5, accuracy: 0.001)
+            XCTAssertTrue(diagnostics.events.contains { $0.reason == .resizeCompleted && abs($0.state.width - 506) < 0.001 })
+            // A second gesture continues resizing instead of stopping at a preset.
             pinch(controller, editor: editor, delta: 0.1)
-            XCTAssertTrue(diagnostics.events.contains { $0.reason == .presetLimit })
+            settle()
+            XCTAssertEqual(editor.frame.width, 556.6, accuracy: 0.001)
+            XCTAssertEqual(editor.frame.height, 332.75, accuracy: 0.001)
+            XCTAssertFalse(diagnostics.events.contains { $0.reason == .presetLimit })
             XCTAssertFalse(controller.handleMagnification(delta: 0.1, phase: .began, locationInWindow: NSPoint(x: -1000, y: -1000)))
             XCTAssertEqual(diagnostics.events.last?.reason, .outsidePanel)
         }
@@ -200,7 +206,8 @@ final class FloatingResizeTests: XCTestCase {
             XCTAssertTrue(controller.handleMagnification(delta: 0.1, phase: .began, locationInWindow: location))
             XCTAssertTrue(controller.handleMagnification(delta: 0, phase: .ended, locationInWindow: location))
             settle()
-            XCTAssertEqual(editor.frame.size, PanelSize.large.dimensions)
+            XCTAssertEqual(editor.frame.width, 506, accuracy: 0.001)
+            XCTAssertEqual(editor.frame.height, 302.5, accuracy: 0.001)
         }
     }
 
@@ -305,6 +312,119 @@ final class FloatingResizeTests: XCTestCase {
             XCTAssertEqual(customized.width, beforeEdge.width + 40, accuracy: 0.01)
             settle(1.1)
             XCTAssertEqual(editor.frame.size, customized)
+        }
+    }
+
+    func testDockedPinchTracksSmallDeltasWithFixedTopAndPreservesCustomSize() throws {
+        let diagnostics = InteractionDiagnostics(defaults: nil, enabled: true)
+        try withPanel(diagnostics: diagnostics) { controller, panel, editor, text in
+            let initial = screenRect(panel, editor), home = panel.frame.origin
+            text.setSelectedRange(NSRange(location: 24, length: 9))
+            let selection = text.selectedRange()
+            let font = try XCTUnwrap(text.textStorage?.attribute(.font, at: 24, effectiveRange: nil) as? NSFont)
+            let location = NSPoint(x: editor.frame.midX, y: editor.frame.midY)
+            XCTAssertTrue(controller.handleMagnification(delta: 0, phase: .began, locationInWindow: location))
+            var size = initial.size
+            for delta: CGFloat in [0.01, 0.015, 0.02, -0.025, 0.01] {
+                XCTAssertTrue(controller.handleMagnification(delta: delta, phase: .changed, locationInWindow: location))
+                size.width *= 1 + delta; size.height *= 1 + delta
+                if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                    XCTAssertNotEqual(editor.frame.width, size.width, accuracy: 0.01)
+                }
+                settle(0.06)
+                let visible = screenRect(panel, editor)
+                XCTAssertEqual(visible.maxY, initial.maxY, accuracy: 0.001)
+                XCTAssertEqual(visible.midX, initial.midX, accuracy: 0.001)
+                XCTAssertEqual(panel.frame.origin, home)
+            }
+            XCTAssertTrue(controller.handleMagnification(delta: 0.01, phase: .ended, locationInWindow: location))
+            size.width *= 1.01; size.height *= 1.01
+            settle()
+            XCTAssertEqual(editor.frame.width, size.width, accuracy: 0.001)
+            XCTAssertEqual(editor.frame.height, size.height, accuracy: 0.001)
+            XCTAssertEqual(text.selectedRange(), selection)
+            XCTAssertEqual((text.textStorage?.attribute(.font, at: 24, effectiveRange: nil) as? NSFont)?.pointSize, font.pointSize)
+            XCTAssertEqual(text.string, source)
+            XCTAssertEqual(diagnostics.events.last?.reason, .resizeCompleted)
+
+            controller.collapse(); settle(1.1)
+            controller.expand(); settle(1.1)
+            XCTAssertEqual(editor.frame.width, size.width, accuracy: 0.001)
+            let start = header(panel, editor)
+            let out = NSPoint(x: start.x + 80, y: start.y - 170)
+            editor.dragHandle.onBegin?(start); editor.dragHandle.onMove?(out); editor.dragHandle.onEnd?(out)
+            settle()
+            let back = header(panel, editor)
+            editor.dragHandle.onBegin?(back); editor.dragHandle.onMove?(start); editor.dragHandle.onEnd?(start)
+            settle()
+            XCTAssertEqual(editor.frame.width, size.width, accuracy: 0.001)
+            XCTAssertEqual(editor.frame.height, size.height, accuracy: 0.001)
+            XCTAssertEqual(panel.frame.origin, home)
+        }
+    }
+
+    func testDockedLimitsReverseImmediatelyAndZeroMotionResumesFollow() throws {
+        let diagnostics = InteractionDiagnostics(defaults: nil, enabled: true)
+        try withPanel(diagnostics: diagnostics) { controller, panel, editor, _ in
+            let initial = screenRect(panel, editor), home = panel.frame.origin
+            pinch(controller, editor: editor, delta: 0.15)
+            settle(0.08)
+            let intermediate = editor.frame.width
+            pinch(controller, editor: editor, delta: 0)
+            XCTAssertEqual(editor.frame.width, intermediate, accuracy: 0.1)
+            settle(1.1)
+            XCTAssertEqual(editor.frame.width, initial.width * 1.15, accuracy: 0.001)
+            let location = NSPoint(x: editor.frame.midX, y: editor.frame.midY)
+            XCTAssertTrue(controller.handleMagnification(delta: 100, phase: .began, locationInWindow: location))
+            settle(1.1)
+            let largest = screenRect(panel, editor), screen = try XCTUnwrap(panel.screen)
+            XCTAssertEqual(largest.maxY, initial.maxY, accuracy: 0.001)
+            XCTAssertEqual(largest.midX, initial.midX, accuracy: 0.001)
+            XCTAssertGreaterThanOrEqual(largest.minY, screen.visibleFrame.minY - 0.001)
+            XCTAssertLessThanOrEqual(largest.width, min(1200, screen.visibleFrame.width) + 0.001)
+            XCTAssertTrue(controller.handleMagnification(delta: -0.01, phase: .changed, locationInWindow: location))
+            settle(0.08)
+            XCTAssertLessThan(editor.frame.width, largest.width)
+            XCTAssertTrue(controller.handleMagnification(delta: -100, phase: .changed, locationInWindow: location))
+            settle(1.1)
+            let smallest = editor.frame.size
+            XCTAssertGreaterThanOrEqual(smallest.width, 320 - 0.001)
+            XCTAssertGreaterThanOrEqual(smallest.height, 190 - 0.001)
+            XCTAssertLessThan(smallest.width, initial.width)
+            XCTAssertTrue(controller.handleMagnification(delta: 0.01, phase: .changed, locationInWindow: location))
+            settle(0.1)
+            XCTAssertGreaterThan(editor.frame.width, smallest.width)
+            XCTAssertTrue(controller.handleMagnification(delta: 0, phase: .cancelled, locationInWindow: location))
+            settle()
+            XCTAssertEqual(editor.frame.width, smallest.width * 1.01, accuracy: 0.001)
+            XCTAssertEqual(panel.frame.origin, home)
+            XCTAssertEqual(diagnostics.events.filter { $0.reason == .sizeLimit }.count, 2)
+        }
+    }
+
+    func testDockingGestureAccumulatesAndContinuesAfterArrival() throws {
+        let diagnostics = InteractionDiagnostics(defaults: nil, enabled: true)
+        try withPanel(diagnostics: diagnostics) { controller, panel, editor, _ in
+            let home = panel.frame.origin, start = header(panel, editor)
+            let out = NSPoint(x: start.x + 80, y: start.y - 170)
+            editor.dragHandle.onBegin?(start); editor.dragHandle.onMove?(out); editor.dragHandle.onEnd?(out)
+            settle()
+            let back = header(panel, editor)
+            editor.dragHandle.onBegin?(back); editor.dragHandle.onMove?(start); editor.dragHandle.onEnd?(start)
+            let location = NSPoint(x: editor.frame.midX, y: editor.frame.midY)
+            XCTAssertTrue(controller.handleMagnification(delta: 0.01, phase: .began, locationInWindow: location))
+            XCTAssertTrue(controller.handleMagnification(delta: 0.02, phase: .changed, locationInWindow: location))
+            let factor: CGFloat = 1.01 * 1.02
+            let queued = try XCTUnwrap(diagnostics.events.last { $0.reason == .resizeQueued })
+            XCTAssertEqual(try XCTUnwrap(queued.state.targetWidth), 460 * factor, accuracy: 0.001)
+            settle(0.45)
+            XCTAssertEqual(panel.frame.origin, home)
+            XCTAssertTrue(controller.handleMagnification(delta: -0.01, phase: .changed, locationInWindow: location))
+            XCTAssertTrue(controller.handleMagnification(delta: 0, phase: .ended, locationInWindow: location))
+            settle(1.1)
+            XCTAssertEqual(editor.frame.width, 460 * factor * 0.99, accuracy: 0.001)
+            XCTAssertEqual(editor.frame.height, 275 * factor * 0.99, accuracy: 0.001)
+            XCTAssertEqual(diagnostics.events.last?.reason, .resizeCompleted)
         }
     }
 

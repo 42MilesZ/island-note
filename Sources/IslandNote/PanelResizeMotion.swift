@@ -2,7 +2,7 @@ import AppKit
 
 /// A critically damped follow: gentle acceleration, then a soft landing.
 /// Retargeting keeps position and velocity instead of restarting an easing curve.
-struct FloatingResizeMotion {
+struct PanelResizeMotion {
     static let frequency: CGFloat = 12
     private(set) var rect: NSRect
     var target: NSRect

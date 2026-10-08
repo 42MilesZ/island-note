@@ -3,46 +3,48 @@ import AppKit
 @testable import IslandNote
 
 final class PanelPinchTests: XCTestCase {
-    func testDimensions() {
-        XCTAssertEqual(PanelSize.large.dimensions.width / PanelSize.standard.dimensions.width, 1.5)
-        XCTAssertEqual(PanelSize.large.dimensions.height / PanelSize.standard.dimensions.height, 2)
+    private let screen = NSRect(x: -500, y: 60, width: 1200, height: 840)
+    private var initial: NSRect { NSRect(x: -130, y: 625, width: 460, height: 275) }
+    private func magnify(_ rect: NSRect, _ delta: CGFloat) -> (rect: NSRect, limited: Bool) {
+        FloatingPanelLayout.magnified(rect, delta: delta, maximum: screen.size, screen: screen,
+            minimum: NSSize(width: 320, height: 190), anchoredToTop: true)
     }
 
-    func testSmallDeltasAccumulateAndCommitOnlyOnce() {
-        var pinch = PanelPinch()
-        XCTAssertNil(pinch.update(delta: 0.03, phase: .began, size: .standard))
-        XCTAssertNil(pinch.update(delta: 0.03, phase: .changed, size: .standard))
-        XCTAssertEqual(pinch.update(delta: 0.03, phase: .changed, size: .standard), .large)
-        XCTAssertNil(pinch.update(delta: -0.5, phase: .changed, size: .large))
-        XCTAssertNil(pinch.update(delta: 0, phase: .ended, size: .large))
-        XCTAssertFalse(pinch.isActive)
-        XCTAssertEqual(pinch.update(delta: -0.1, phase: .began, size: .large), .standard)
+    func testSmallDeltasRemainContinuousAndTopAnchoredOnOffsetScreen() {
+        var rect = initial, factor: CGFloat = 1
+        for delta: CGFloat in [0.01, 0.02, -0.015, 0.03] {
+            factor *= 1 + delta
+            let result = magnify(rect, delta)
+            XCTAssertFalse(result.limited)
+            rect = result.rect
+            XCTAssertEqual(rect.width, initial.width * factor, accuracy: 0.00001)
+            XCTAssertEqual(rect.height, initial.height * factor, accuracy: 0.00001)
+            XCTAssertEqual(rect.midX, initial.midX, accuracy: 0.00001)
+            XCTAssertEqual(rect.maxY, initial.maxY, accuracy: 0.00001)
+        }
     }
 
-    func testEndpointDoesNotRepeatOrReverseWithinOneGesture() {
-        var pinch = PanelPinch()
-        XCTAssertNil(pinch.update(delta: 0.2, phase: .began, size: .large))
-        XCTAssertNil(pinch.update(delta: -0.5, phase: .changed, size: .large))
-        XCTAssertNil(pinch.update(delta: 0, phase: .ended, size: .large))
-        XCTAssertEqual(pinch.update(delta: -0.09, phase: .began, size: .large), .standard)
+    func testBothLimitsPreserveAnchorAndReverseWithoutOvershoot() {
+        let large = magnify(initial, 100)
+        XCTAssertTrue(large.limited)
+        XCTAssertEqual(large.rect.width, 1200, accuracy: 0.00001)
+        XCTAssertEqual(large.rect.maxY, initial.maxY, accuracy: 0.00001)
+        XCTAssertEqual(magnify(large.rect, -0.01).rect.width, 1188, accuracy: 0.00001)
+        let small = magnify(initial, -100)
+        XCTAssertTrue(small.limited)
+        XCTAssertEqual(small.rect.width, 320, accuracy: 0.00001)
+        XCTAssertEqual(small.rect.maxY, initial.maxY, accuracy: 0.00001)
+        XCTAssertEqual(magnify(small.rect, 0.01).rect.width, 323.2, accuracy: 0.00001)
     }
 
-    func testCancellationAndNewGestureDiscardUncommittedDeltas() {
-        var pinch = PanelPinch()
-        XCTAssertNil(pinch.update(delta: 0.06, phase: .began, size: .standard))
-        XCTAssertNil(pinch.update(delta: 0.1, phase: .cancelled, size: .standard))
-        XCTAssertFalse(pinch.isActive)
-        XCTAssertNil(pinch.update(delta: 0.03, phase: .began, size: .standard))
-        XCTAssertNil(pinch.update(delta: 0.06, phase: .began, size: .standard))
-    }
-
-    func testEndedDeltaCanCommitAndNoiseDoesNotLeakToNextGesture() {
-        var pinch = PanelPinch()
-        XCTAssertNil(pinch.update(delta: 0.05, phase: .began, size: .standard))
-        XCTAssertEqual(pinch.update(delta: 0.04, phase: .ended, size: .standard), .large)
-        XCTAssertFalse(pinch.isActive)
-        XCTAssertNil(pinch.update(delta: -0.03, phase: .began, size: .large))
-        XCTAssertNil(pinch.update(delta: 0, phase: .ended, size: .large))
-        XCTAssertNil(pinch.update(delta: -0.06, phase: .began, size: .large))
+    func testScreenSmallerThanMinimumAndNonFiniteDeltas() {
+        let tiny = NSRect(x: 900, y: -200, width: 250, height: 150)
+        let rect = NSRect(x: 925, y: -150, width: 200, height: 100)
+        let result = FloatingPanelLayout.magnified(rect, delta: 100, maximum: tiny.size, screen: tiny,
+            minimum: NSSize(width: 320, height: 190), anchoredToTop: true)
+        XCTAssertEqual(result.rect.size, NSSize(width: 250, height: 125))
+        XCTAssertEqual(result.rect.maxY, tiny.maxY)
+        XCTAssertEqual(magnify(initial, .nan).rect, initial)
+        XCTAssertEqual(magnify(initial, .infinity).rect, initial)
     }
 }
