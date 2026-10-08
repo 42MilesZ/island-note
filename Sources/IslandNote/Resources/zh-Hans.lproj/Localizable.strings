@@ -240,3 +240,13 @@
 "Note file could not be changed" = "无法切换笔记文件";
 "Wait for the current sync to finish, then switch files." = "请等待当前同步完成后再切换文件。";
 "Finish composing your text before switching files." = "请先完成当前文字输入，再切换文件。";
+
+// Settings hierarchy
+"Saved on this Mac" = "保存在这台 Mac";
+"Optional sync with your own Flomo account." = "按需连接你的 Flomo，同步这份笔记。";
+"Local Diagnostics" = "本机诊断";
+"Helps troubleshoot interactions. Records stay on this Mac." = "用于排查交互问题，记录只保存在本机。";
+"More Flomo Options" = "更多 Flomo 选项";
+"About Local Diagnostics" = "了解本机诊断";
+"Save this note at a new location. The previous file is kept and its sync is paused." = "将当前笔记保存到新位置，原文件保留，旧位置的同步暂停。";
+"Edit an existing file and save back to it. It keeps its own Flomo connection." = "打开并编辑已有文件，保存回该文件，使用它自己的 Flomo 连接。";

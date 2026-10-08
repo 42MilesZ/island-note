@@ -124,14 +124,15 @@ final class ReleaseExperienceTests: XCTestCase {
             L10n.language = language
             let preferences = AppPreferences(defaults: nil)
             let diagnostics = InteractionDiagnostics(defaults: nil, enabled: false)
-            let controller = SettingsWindowController(preferences: preferences, diagnostics: diagnostics)
+            let controller = SettingsWindowController(preferences: preferences, diagnostics: diagnostics, appVersion: "1.0")
+            controller.notePath = "/Users/example/Documents/Miles-Vault/Daily notes/Island Note.md"
+            controller.rebuild()
             let window = try XCTUnwrap(controller.window)
+            window.appearance = NSAppearance(named: .aqua)
             controller.showWindow(nil)
             RunLoop.main.run(until: Date().addingTimeInterval(0.1))
             let root = try XCTUnwrap(window.contentView)
             root.layoutSubtreeIfNeeded()
-            root.wantsLayer = true
-            root.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
             func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
             let views = descendants(root)
             XCTAssertFalse(views.contains { $0 is NSPopUpButton })
@@ -153,8 +154,56 @@ final class ReleaseExperienceTests: XCTestCase {
                 root.cacheDisplay(in: root.bounds, to: bitmap)
                 try bitmap.representation(using: .png, properties: [:])?.write(to: directory.appendingPathComponent("settings-" + language.rawValue + ".png"))
             }
+            preferences.setFlomoEnabled(true)
+            controller.rebuild()
+            window.appearance = NSAppearance(named: .darkAqua)
+            RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+            if let bitmap = root.bitmapImageRepForCachingDisplay(in: root.bounds) {
+                root.cacheDisplay(in: root.bounds, to: bitmap)
+                try bitmap.representation(using: .png, properties: [:])?.write(to: directory.appendingPathComponent("settings-" + language.rawValue + "-dark.png"))
+            }
             window.close()
         }
+    }
+
+    func testSettingsSwitchAcceptsAndRejectsChangesWithoutReplacingFocusedControls() throws {
+        let preferences = AppPreferences(defaults: nil)
+        let controller = SettingsWindowController(preferences: preferences,
+            diagnostics: InteractionDiagnostics(defaults: nil, enabled: false))
+        let window = try XCTUnwrap(controller.window)
+        defer { window.close() }
+        controller.showWindow(nil)
+        let root = try XCTUnwrap(window.contentView)
+        root.layoutSubtreeIfNeeded()
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        let buttons = descendants(root).compactMap { $0 as? NSButton }
+        let flomo = try XCTUnwrap(buttons.first { $0.accessibilityIdentifier() == "settings.flomo" })
+        let configure = try XCTUnwrap(buttons.first { $0.title == L10n.tr("Configure Flomo…") })
+        window.makeFirstResponder(flomo)
+        let initialFrame = window.frame
+        controller.onFlomoToggle = { preferences.setFlomoEnabled($0); return true }
+        flomo.performClick(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertTrue(preferences.flomoEnabled)
+        XCTAssertEqual(flomo.state, .on)
+        XCTAssertTrue(configure.isEnabled)
+        XCTAssertTrue(window.firstResponder === flomo)
+        let thumb = try XCTUnwrap(flomo.layer?.sublayers?.first?.sublayers?.first)
+        XCTAssertEqual(thumb.position.x, 31, "The native action must update the drawn switch as well as its state.")
+        controller.onFlomoToggle = { _ in false }
+        flomo.performClick(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(flomo.state, .on)
+        XCTAssertTrue(configure.isEnabled)
+        XCTAssertEqual(thumb.position.x, 31)
+        controller.onFlomoToggle = { preferences.setFlomoEnabled($0); return true }
+        flomo.performClick(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(flomo.state, .off)
+        XCTAssertFalse(configure.isEnabled)
+        XCTAssertEqual(thumb.position.x, 13)
+        XCTAssertTrue(window.contentView === root)
+        XCTAssertEqual(window.frame, initialFrame)
     }
 
     func testClearingDiagnosticsDeletesOnlyItsRecordsAndKeepsOptInState() throws {

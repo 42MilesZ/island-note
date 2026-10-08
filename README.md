@@ -54,7 +54,7 @@ Settings shows the active note path. **Open Existing File…** switches to an ex
 
 The sandboxed app stores a security-scoped bookmark for user-selected files, maintaining access across launches. Flomo records are stored per canonical document path under `IslandNote/Documents/<SHA256>/flomo-sync.json`. The original global record is copied once to the original file's record and retained as recovery data; switching to a different file never inherits it. Reopening a previously connected file restores its own connection.
 
-To move from direct distribution to the sandboxed app, first open the original note, then choose **Restore Previous Flomo Connection…** and select the old `Library/Application Support/IslandNote` directory. Import validates that the connection belongs to the currently selected file, retains interrupted write/create intents, and starts paused. Existing destination records are not replaced. Review the connection in Flomo settings before resuming. The personal token remains in Keychain.
+To move from direct distribution to the sandboxed app, first open the original note, then open the **More Flomo Options** (ellipsis) menu in Settings, choose **Restore Previous Flomo Connection…**, and select the old `Library/Application Support/IslandNote` directory. Import validates that the connection belongs to the currently selected file, retains interrupted write/create intents, and starts paused. Existing destination records are not replaced. Review the connection in Flomo settings before resuming. The personal token remains in Keychain.
 
 ## Flomo sync
 

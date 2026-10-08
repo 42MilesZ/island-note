@@ -240,3 +240,13 @@
 "Note file could not be changed" = "Note file could not be changed";
 "Wait for the current sync to finish, then switch files." = "Wait for the current sync to finish, then switch files.";
 "Finish composing your text before switching files." = "Finish composing your text before switching files.";
+
+// Settings hierarchy
+"Saved on this Mac" = "Saved on this Mac";
+"Optional sync with your own Flomo account." = "Optional sync with your own Flomo account.";
+"Local Diagnostics" = "Local Diagnostics";
+"Helps troubleshoot interactions. Records stay on this Mac." = "Helps troubleshoot interactions. Records stay on this Mac.";
+"More Flomo Options" = "More Flomo Options";
+"About Local Diagnostics" = "About Local Diagnostics";
+"Save this note at a new location. The previous file is kept and its sync is paused." = "Save this note at a new location. The previous file is kept and its sync is paused.";
+"Edit an existing file and save back to it. It keeps its own Flomo connection." = "Edit an existing file and save back to it. It keeps its own Flomo connection.";
