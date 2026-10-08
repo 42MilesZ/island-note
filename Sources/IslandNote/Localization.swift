@@ -1,7 +1,9 @@
 import Foundation
 
 enum L10n {
-    static var language = AppLanguage(rawValue: UserDefaults.standard.string(forKey: AppPreferences.languageKey) ?? "") ?? .system
+    // Production follows macOS; explicit languages are used for resource verification.
+    // Previous appLanguage preferences no longer override the system language.
+    static var language: AppLanguage = .system
 
     private static var resourceBundle: Bundle {
         #if SWIFT_PACKAGE

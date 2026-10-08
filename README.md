@@ -17,8 +17,8 @@ Pinches received during a return to the island accumulate continuously against t
 Open **Settings…** from the island or editor's context menu, or press **⌘,**.
 The panel retracts while settings or the policy is open so its floating level cannot hide those windows.
 Flomo and local diagnostics are independent opt-in features, both off by default.
-The interface follows the system language, with English and Simplified Chinese available in Settings;
-changing language preserves note contents, selection and undo history.
+The interface follows the system language, using Simplified Chinese for Chinese and English otherwise.
+There is no in-app language selector; previous overrides are ignored.
 **Privacy Policy** shows the complete policy bundled with the app, including while offline.
 The public policy is in [docs/privacy-policy.md](docs/privacy-policy.md).
 

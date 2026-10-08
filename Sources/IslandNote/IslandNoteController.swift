@@ -856,9 +856,6 @@ final class IslandNoteController: NSObject {
             syncItem.target = self
             menu.addItem(syncItem)
         }
-        let privacy = NSMenuItem(title: L10n.tr("Privacy Policy"), action: #selector(showPrivacyPolicy), keyEquivalent: "")
-        privacy.target = self
-        menu.addItem(privacy)
         menu.addItem(.separator())
         let quit = NSMenuItem(title: L10n.tr("Quit Island Note"), action: #selector(quitAction), keyEquivalent: "q")
         quit.keyEquivalentModifierMask = [.command]
@@ -892,14 +889,6 @@ final class IslandNoteController: NSObject {
             settings.onDiagnosticToggle = { [weak self] in self?.toggleDiagnostics() }
             settings.onExportDiagnostics = { [weak self] in self?.exportDiagnostics() }
             settings.onClearDiagnostics = { [weak self] in self?.diagnostics.clear() }
-            settings.onLanguageChange = { [weak self] language in
-                guard let self else { return }
-                self.preferences.setLanguage(language)
-                self.installMainMenu()
-                self.island.setAccessibilityLabel(L10n.tr("Open Island Note"))
-                self.editor.refreshLocalizedUI()
-                self.sync?.refreshLanguage()
-            }
             settings.onPrivacy = { [weak self] in self?.showPrivacyPolicy() }
             settings.onClose = { [weak self] in self?.showingSyncSettings = false }
             settingsWindow = settings

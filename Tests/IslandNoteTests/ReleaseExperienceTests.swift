@@ -4,21 +4,18 @@ import XCTest
 
 @MainActor
 final class ReleaseExperienceTests: XCTestCase {
-    func testNewPreferencesAreLocalOnlyAndChoicesPersistIndependently() throws {
+    func testFlomoPreferencePersistsWithoutLanguageOverride() throws {
         let suite = "island-preferences-" + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
-        let original = L10n.language
-        defer { defaults.removePersistentDomain(forName: suite); L10n.language = original }
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("zh-Hans", forKey: "appLanguage")
         let preferences = AppPreferences(defaults: defaults)
         XCTAssertFalse(preferences.flomoEnabled)
-        XCTAssertEqual(preferences.language, .system)
-        preferences.setLanguage(.chinese)
         preferences.setFlomoEnabled(true)
         let reopened = AppPreferences(defaults: defaults)
         XCTAssertTrue(reopened.flomoEnabled)
-        XCTAssertEqual(reopened.language, .chinese)
         reopened.setFlomoEnabled(false)
-        XCTAssertEqual(reopened.language, .chinese)
+        XCTAssertFalse(AppPreferences(defaults: defaults).flomoEnabled)
         XCTAssertFalse(defaults.bool(forKey: InteractionDiagnostics.preferenceKey))
     }
 
@@ -86,6 +83,7 @@ final class ReleaseExperienceTests: XCTestCase {
             root.layer?.backgroundColor = NSColor.windowBackgroundColor.cgColor
             func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
             let views = descendants(root)
+            XCTAssertFalse(views.contains { $0 is NSPopUpButton })
             let flomo = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first { $0.accessibilityIdentifier() == "settings.flomo" })
             XCTAssertEqual(flomo.state, .off)
             XCTAssertFalse(views.compactMap { $0 as? NSButton }.first { $0.title == L10n.tr("Configure Flomo…") }?.isEnabled ?? true)

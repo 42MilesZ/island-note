@@ -9,7 +9,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     var onDiagnosticToggle: (() -> Void)?
     var onExportDiagnostics: (() -> Void)?
     var onClearDiagnostics: (() -> Void)?
-    var onLanguageChange: ((AppLanguage) -> Void)?
     var onPrivacy: (() -> Void)?
     var onClose: (() -> Void)?
 
@@ -81,17 +80,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let row = NSStackView(views: [export, clear]); row.spacing = 12
         stack.addArrangedSubview(row)
         separator()
-        label("Language")
-        let language = NSPopUpButton()
-        for option in AppLanguage.allCases {
-            language.addItem(withTitle: option.title)
-            language.lastItem?.representedObject = option.rawValue
-        }
-        language.selectItem(at: AppLanguage.allCases.firstIndex(of: preferences.language) ?? 0)
-        language.target = self; language.action = #selector(changeLanguage(_:))
-        language.setAccessibilityIdentifier("settings.language")
-        stack.addArrangedSubview(language)
-        separator()
         let privacy = NSButton(title: L10n.tr("Privacy Policy"), target: self, action: #selector(showPrivacy))
         stack.addArrangedSubview(privacy)
         root.layoutSubtreeIfNeeded()
@@ -104,10 +92,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     @objc private func toggleDiagnostics() { onDiagnosticToggle?(); rebuild() }
     @objc private func exportDiagnostics() { onExportDiagnostics?(); rebuild() }
     @objc private func clearDiagnostics() { onClearDiagnostics?(); rebuild() }
-    @objc private func changeLanguage(_ sender: NSPopUpButton) {
-        guard let value = sender.selectedItem?.representedObject as? String, let language = AppLanguage(rawValue: value) else { return }
-        onLanguageChange?(language); rebuild()
-    }
     @objc private func showPrivacy() { onPrivacy?() }
     func windowWillClose(_ notification: Notification) { onClose?() }
 }
