@@ -4,7 +4,7 @@
 
 ## 本机笔记
 
-Island Note 默认在你的 Mac 上保存笔记，无需注册账号。应用不会自动向开发者发送笔记，也没有开发者运营的笔记服务器。Mac App Store 版本将笔记保存在应用的沙盒容器内；直装版本还可以使用你配置的本机 Markdown 文件。应用设置用于保存功能开关。界面语言跟随系统。
+Island Note 默认在你的 Mac 上保存笔记，无需注册账号。应用不会自动向开发者发送笔记，也没有开发者运营的笔记服务器。Mac App Store 版本默认将笔记保存在应用的沙盒容器内。你可以在设置中更改保存位置，或打开已有的 Markdown、纯文本文件并保存回原文件。商店版读写沙盒以外的文件，需要你通过系统文件选择器授权；访问授权保存在本机，以便下次继续使用。直装版本也支持你配置的本机文件。应用设置用于保存功能开关。界面语言跟随系统。
 
 ## 可选的 Flomo 同步
 
@@ -38,7 +38,7 @@ Updated October 8, 2026. Developer: hanyu zhu.
 
 ## Local notes
 
-Island Note saves notes on your Mac by default and does not require an app account. It does not automatically send notes to the developer, and the developer does not operate a note server. The Mac App Store version stores notes in its sandbox container. The direct-distribution version can also use a local Markdown file you configure. App preferences store your feature choices. The interface language follows your system.
+Island Note saves notes on your Mac by default and does not require an app account. It does not automatically send notes to the developer, and the developer does not operate a note server. The Mac App Store version saves notes in its sandbox container by default. In Settings, you can change the save location or open an existing Markdown or plain-text file and save changes back to it. Access to files outside the store app’s sandbox requires your authorization through the system file picker. This authorization stays on your Mac so the app can reopen the file later. The direct-distribution version also supports local files you configure. App preferences store your feature choices. The interface language follows your system.
 
 ## Optional Flomo sync
 
