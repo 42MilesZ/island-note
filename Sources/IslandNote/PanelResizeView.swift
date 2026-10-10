@@ -68,6 +68,7 @@ final class PanelResizeHandle: NSView {
     var onEnd: ((NSPoint) -> Void)?
     var excludedRect = NSRect.zero
     private var hoverAreas: [NSTrackingArea] = []
+    private var trackedRects: [NSRect]?
 
     var interactiveRects: [NSRect] {
         let cut = bounds.intersection(excludedRect)
@@ -131,9 +132,12 @@ final class PanelResizeHandle: NSView {
     }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
+        let rects = interactiveRects
+        guard trackedRects != rects else { return }
+        trackedRects = rects
         for area in hoverAreas { removeTrackingArea(area) }
         hoverAreas.removeAll()
-        for rect in interactiveRects {
+        for rect in rects {
             // activeAlways delivers entered/moved even while the floating window
             // is inactive. cursorUpdate uses a separate active-app area per AppKit.
             for options: NSTrackingArea.Options in [[.mouseEnteredAndExited, .mouseMoved, .activeAlways], [.cursorUpdate, .activeInActiveApp]] {
@@ -170,8 +174,8 @@ final class PanelResizeView: NSView {
     var isEnabled = false {
         didSet { isHidden = !isEnabled }
     }
-    var panelRect = NSRect.zero { didSet { layoutHandles() } }
-    var statusButtonWidth: CGFloat = 24 { didSet { layoutHandles() } }
+    var panelRect = NSRect.zero { didSet { if panelRect != oldValue { layoutHandles() } } }
+    var statusButtonWidth: CGFloat = 24 { didSet { if statusButtonWidth != oldValue { layoutHandles() } } }
     private var handles: [PanelResizeHandle] = []
 
     override init(frame: NSRect) {

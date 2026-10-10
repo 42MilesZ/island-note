@@ -45,7 +45,7 @@ struct HeadingOutline: View {
         GeometryReader { geometry in
             ScrollViewReader { reader in
                 ScrollView(.vertical) {
-                    VStack(alignment: .leading, spacing: 0) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(model.isVisible ? Array(model.headings.enumerated()) : [], id: \.element.id) { index, heading in
                             row(heading, index: index)
                                 .id(heading.id)

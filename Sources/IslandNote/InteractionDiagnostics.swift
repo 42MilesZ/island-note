@@ -7,7 +7,7 @@ enum InteractionDiagnosticReason: String, Codable {
     case belowThreshold, gestureAlreadyHandled, presetLimit, sizeLimit
     case gestureCancelled, invalidGesture, resizeRequested, resizeQueued
     case resizeCompleted, resizeInterrupted, resizeStalled
-    case headerGrabbed, headerReleased, floatingChanged, edgeResizeBegan, edgeResizeEnded
+    case headerGrabbed, headerReleased, floatingChanged, edgeResizeBegan, edgeResizeEnded, edgeResizeInterrupted
     case gestureFinished, gestureInterrupted, noGestureEvents
     case continuousResizeBegan, continuousResizeFinished
     case resizeHoverChanged
@@ -21,6 +21,7 @@ enum InteractionDiagnosticReason: String, Codable {
         case .outsidePanel: return L10n.tr("The gesture started outside the panel.")
         case .headerDragging: return L10n.tr("The drag strip owns the interaction, so pinch resizing is paused.")
         case .edgeResizing: return L10n.tr("An edge resize owns the interaction, so pinch resizing is paused.")
+        case .edgeResizeInterrupted: return L10n.tr("An unfinished edge resize was released so the next interaction can continue.")
         case .belowThreshold: return L10n.tr("The legacy resize threshold was not reached.")
         case .gestureAlreadyHandled: return L10n.tr("The legacy gesture had already been handled.")
         case .presetLimit: return L10n.tr("The legacy preset limit was reached.")

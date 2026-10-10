@@ -202,6 +202,7 @@
 "The gesture started outside the panel." = "手势起点位于面板外，未接管缩放。";
 "The drag strip owns the interaction, so pinch resizing is paused." = "正在按住拖拽栏，此时不执行双指缩放。";
 "An edge resize owns the interaction, so pinch resizing is paused." = "正在拖动边缘，此时不执行双指缩放。";
+"An unfinished edge resize was released so the next interaction can continue." = "已解除残留的边缘拖拽状态，可继续缩放。";
 "The legacy resize threshold was not reached." = "本次缩放幅度尚未达到触发阈值。";
 "The legacy gesture had already been handled." = "这一轮手势已处理过，抬起手指后可开始下一轮。";
 "The legacy preset limit was reached." = "已到当前预设的最大或最小档位。";

@@ -108,6 +108,7 @@ final class IslandNoteController: NSObject {
     private var shadowLayer: CALayer!
     private var dragInteraction: PanelDragCoordinator!
     private var displayObservation: NSObjectProtocol?
+    private var panelFocusObservation: NSObjectProtocol?
     private var resizeHandles: PanelResizeView!
     private var lastResizeHover: PanelResizeEdges?
 
@@ -129,7 +130,6 @@ final class IslandNoteController: NSObject {
         let floating: Bool
         var rect: NSRect
         var resumeSize: NSSize?
-        var motionSeed: PanelResizeMotion?
         var didResize = false
         var wasLimited = false
     }
@@ -138,9 +138,6 @@ final class IslandNoteController: NSObject {
     private var pendingDockedSize: NSSize?
     private let diagnostics: InteractionDiagnostics
     private var resizeTimer: Timer?
-    private var resizeMotion: PanelResizeMotion?
-    private var resizeTick: TimeInterval = 0
-    private var resizeMotionIsFloating = false
     private var floatingSize: NSSize?
     private var targetViewportSize: NSSize?
     private struct EdgeResize {
@@ -373,7 +370,7 @@ final class IslandNoteController: NSObject {
                 if shouldCollapse { self.pendingDockedSize = nil; self.collapse() }
                 else if let size = self.pendingDockedSize {
                     self.pendingDockedSize = nil
-                    self.followResize(to: self.dockedScreenRect(size: size), floating: false)
+                    self.animateViewport(to: size)
                 }
             }, getTargetRect: { [weak self] in
                 guard let self else { return .zero }
@@ -386,6 +383,7 @@ final class IslandNoteController: NSObject {
             // A new grab starts from the currently displayed intermediate viewport.
             self.stopViewportAnimation()
             self.resetPinchGesture()
+            self.interruptEdgeResize()
             self.pendingDockedSize = nil
             self.editor.frame = self.expandedRect
             self.hitGate.hitRect = self.expandedRect
@@ -409,6 +407,18 @@ final class IslandNoteController: NSObject {
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.updateDockScreen() }
+        }
+        panelFocusObservation = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification, object: panel, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if self.isPinching {
+                    self.diagnostics.record(.gestureInterrupted, state: self.diagnosticState())
+                    self.finishPinch()
+                }
+                self.interruptEdgeResize()
+            }
         }
 
         installMonitors()
@@ -470,6 +480,7 @@ final class IslandNoteController: NSObject {
         pendingCollapse?.cancel()
         for monitor in monitors { NSEvent.removeMonitor(monitor) }
         if let displayObservation { NotificationCenter.default.removeObserver(displayObservation) }
+        if let panelFocusObservation { NotificationCenter.default.removeObserver(panelFocusObservation) }
     }
 
     private func installMonitors() {
@@ -477,6 +488,7 @@ final class IslandNoteController: NSObject {
             self?.handleHover()
         }
         let l = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .scrollWheel]) { [weak self] e in
+            if e.type == .scrollWheel { self?.finishPinch() }
             self?.handleHover(e)
             return e
         }
@@ -496,6 +508,8 @@ final class IslandNoteController: NSObject {
         }
         let lk = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             guard let self, e.window === self.panel else { return e }
+            self.finishPinch()
+            self.interruptEdgeResize()
             return self.editor.handleKey(e)
         }
         let lm = NSEvent.addLocalMonitorForEvents(matching: .magnify) { [weak self] e in
@@ -508,7 +522,15 @@ final class IslandNoteController: NSObject {
             }
             return self.handleMagnify(e) ? nil : e
         }
-        monitors = [g, l, gc, lc, gr, lr, lk, lm].compactMap { $0 }
+        // A release can arrive outside the original handle or in another app.
+        let gu = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] e in
+            self?.endEdgeResize(at: self?.screenPoint(for: e) ?? NSEvent.mouseLocation)
+        }
+        let lu = NSEvent.addLocalMonitorForEvents(matching: .leftMouseUp) { [weak self] e in
+            self?.endEdgeResize(at: self?.screenPoint(for: e) ?? NSEvent.mouseLocation)
+            return e
+        }
+        monitors = [g, l, gc, lc, gr, lr, lk, lm, gu, lu].compactMap { $0 }
     }
 
     private func expandedFrame(for size: PanelSize) -> NSRect { viewportFrame(size: size.dimensions) }
@@ -526,7 +548,7 @@ final class IslandNoteController: NSObject {
     }
 
     private func changeFloatingLayout(_ floating: Bool) {
-        edgeResize = nil
+        interruptEdgeResize()
         resizeHandles.isEnabled = floating
         if floating {
             let size = FloatingPanelLayout.clamped(floatingSize ?? PanelSize.standard.floatingDimensions,
@@ -544,7 +566,8 @@ final class IslandNoteController: NSObject {
         handleMagnification(delta: event.magnification, phase: event.phase, locationInWindow: event.locationInWindow)
     }
 
-    func handleMagnification(delta: CGFloat, phase: NSEvent.Phase, locationInWindow: NSPoint) -> Bool {
+    func handleMagnification(delta: CGFloat, phase: NSEvent.Phase, locationInWindow: NSPoint,
+                             pressedMouseButtons: Int = NSEvent.pressedMouseButtons) -> Bool {
         diagnostics.record(.pinchReceived, state: diagnosticState(), delta: delta, phase: phase)
         func reject(_ reason: InteractionDiagnosticReason) -> Bool {
             diagnostics.record(reason, state: diagnosticState(), delta: delta, phase: phase)
@@ -552,6 +575,8 @@ final class IslandNoteController: NSObject {
             return false
         }
         guard mode == .expanded else { return reject(.panelClosed) }
+        // Recover a lost mouse-up without stealing a real, ongoing edge drag.
+        if pressedMouseButtons & 1 == 0 { interruptEdgeResize() }
         guard edgeResize == nil else { return reject(.edgeResizing) }
         guard !dragInteraction.isDragging else { return reject(.headerDragging) }
         // The editor is already visible while its opening contour is still animating.
@@ -563,6 +588,7 @@ final class IslandNoteController: NSObject {
     private func resetPinchGesture() {
         if pinchSession != nil { diagnostics.record(.gestureInterrupted, state: diagnosticState()) }
         pinchSession = nil
+        updateEditorResizeLifecycle()
     }
 
     private func magnifyPanel(delta: CGFloat, phase: NSEvent.Phase) -> Bool {
@@ -577,17 +603,17 @@ final class IslandNoteController: NSObject {
             let floating = dragInteraction.isFloating && !queued
             if !queued, !dragInteraction.prepareForResize() { return false }
             let resume = queued ? nil : targetViewportSize
-            let seed = queued ? nil : resizeMotion
             if !queued { stopViewportAnimation() }
             pendingCollapse?.cancel(); pendingCollapse = nil
             let initial = queued ? dockedScreenRect(size: pendingDockedSize ?? dockedSize) : screenRect(expandedRect)
-            pinchSession = PinchSession(floating: floating, rect: seed?.rect ?? initial, resumeSize: resume, motionSeed: seed)
+            pinchSession = PinchSession(floating: floating, rect: initial, resumeSize: resume)
+            updateEditorResizeLifecycle()
             diagnostics.record(.continuousResizeBegan, state: diagnosticState())
         }
         defer {
             if phase.contains(.ended) {
-                finishPinch()
                 diagnostics.record(.continuousResizeFinished, state: diagnosticState())
+                finishPinch()
             }
         }
         guard delta.isFinite else { diagnostics.record(.invalidGesture, state: diagnosticState()); return true }
@@ -612,7 +638,9 @@ final class IslandNoteController: NSObject {
             pendingDockedSize = result.rect.size
             diagnostics.record(.resizeQueued, state: diagnosticState())
         } else {
-            followResize(to: result.rect, floating: session.floating)
+            // Direct manipulation must follow this event, without a spring tail.
+            stopViewportAnimation()
+            displayResize(result.rect, floating: session.floating)
         }
         return true
     }
@@ -620,12 +648,10 @@ final class IslandNoteController: NSObject {
     private func finishPinch() {
         let session = pinchSession
         pinchSession = nil
-        guard let session, !session.didResize else { return }
-        if let seed = session.motionSeed {
-            resizeMotion = seed
-            resizeMotionIsFloating = session.floating
-            resizeTick = ProcessInfo.processInfo.systemUptime
-            followResize(to: seed.target, floating: session.floating)
+        updateEditorResizeLifecycle()
+        guard let session else { return }
+        if session.didResize {
+            if !dragInteraction.isDocking, resizeTimer == nil { diagnostics.record(.resizeCompleted, state: diagnosticState()) }
         } else if let resume = session.resumeSize {
             animateViewport(to: resume)
         }
@@ -650,51 +676,12 @@ final class IslandNoteController: NSObject {
             minimum: NSSize(width: 320, height: 190), anchoredToTop: true)
     }
 
-    private func displayResize(_ rect: NSRect) {
-        if resizeMotionIsFloating {
+    private func displayResize(_ rect: NSRect, floating: Bool) {
+        if floating {
             let local = viewportFrame(size: rect.size)
             panel.setFrameOrigin(NSPoint(x: rect.minX - local.minX, y: rect.minY - local.minY))
         }
         applyViewport(size: rect.size)
-    }
-
-    private func followResize(to rect: NSRect, floating: Bool) {
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            stopViewportAnimation()
-            resizeMotionIsFloating = floating
-            displayResize(rect)
-            diagnostics.record(.resizeCompleted, state: diagnosticState())
-            return
-        }
-        advanceResize()
-        if resizeMotion == nil {
-            // A docking/aspect timer can still own the viewport after arrival.
-            // Replace that timer before installing the continuous follow.
-            stopViewportAnimation()
-            resizeMotion = pinchSession?.motionSeed ?? PanelResizeMotion(rect: screenRect(expandedRect))
-        }
-        resizeMotionIsFloating = floating
-        pinchSession?.motionSeed = nil
-        resizeMotion?.target = rect
-        targetViewportSize = rect.size
-        resizeTick = ProcessInfo.processInfo.systemUptime
-        guard resizeTimer == nil else { return }
-        let timer = Timer(timeInterval: 1 / Double(max(60, panel.screen?.maximumFramesPerSecond ?? 60)), repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.advanceResize() }
-        }
-        resizeTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
-    }
-
-    private func advanceResize() {
-        guard var motion = resizeMotion else { return }
-        let now = ProcessInfo.processInfo.systemUptime
-        motion.advance(by: now - resizeTick)
-        resizeTick = now
-        motion.constrain(to: magnifiedRect(motion.rect, delta: 0, floating: resizeMotionIsFloating).rect)
-        resizeMotion = motion
-        displayResize(motion.isSettled ? motion.target : motion.rect)
-        if motion.isSettled { stopViewportAnimation(completed: true) }
     }
 
     private func stopViewportAnimation(completed: Bool = false) {
@@ -704,8 +691,8 @@ final class IslandNoteController: NSObject {
         }
         resizeTimer?.invalidate()
         resizeTimer = nil
-        resizeMotion = nil
         targetViewportSize = nil
+        updateEditorResizeLifecycle()
     }
 
     private func animateViewport(to requested: NSSize) {
@@ -717,6 +704,7 @@ final class IslandNoteController: NSObject {
         targetViewportSize = target
         let duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.32
         if duration == 0 { applyViewport(size: target); stopViewportAnimation(completed: true); return }
+        editor.beginInteractiveResize()
         let began = ProcessInfo.processInfo.systemUptime
         let timer = Timer(timeInterval: 1 / Double(max(60, panel.screen?.maximumFramesPerSecond ?? 60)), repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {
@@ -733,7 +721,9 @@ final class IslandNoteController: NSObject {
     }
 
     private func applyViewport(size: NSSize) {
-        expandedRect = viewportFrame(size: size)
+        let rect = viewportFrame(size: size)
+        guard rect != expandedRect else { return }
+        expandedRect = rect
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         editor.frame = expandedRect
@@ -764,6 +754,7 @@ final class IslandNoteController: NSObject {
         if fitted != expandedRect.size { floatingSize = fitted; applyViewport(size: fitted) }
         edgeResize = EdgeResize(edges: edges, mouse: mouse, rect: screenRect(expandedRect),
                                 maximum: floatingMaximum(screen: screen), screen: screen.visibleFrame)
+        updateEditorResizeLifecycle()
         logger.info("Floating edge resize began")
         diagnostics.record(.edgeResizeBegan, state: diagnosticState())
     }
@@ -783,14 +774,27 @@ final class IslandNoteController: NSObject {
         moveEdgeResize(to: mouse)
         guard edgeResize != nil else { return }
         edgeResize = nil
+        updateEditorResizeLifecycle()
         logger.info("Floating size: \(self.expandedRect.width, privacy: .public) x \(self.expandedRect.height, privacy: .public)")
         diagnostics.record(.edgeResizeEnded, state: diagnosticState())
+    }
+
+    private func interruptEdgeResize() {
+        guard edgeResize != nil else { return }
+        edgeResize = nil
+        updateEditorResizeLifecycle()
+        diagnostics.record(.edgeResizeInterrupted, state: diagnosticState())
+    }
+
+    private func updateEditorResizeLifecycle() {
+        if resizeTimer != nil || pinchSession != nil || edgeResize != nil { editor.beginInteractiveResize() }
+        else { editor.endInteractiveResize() }
     }
 
     // MARK: - 悬停 / 点击
 
     private func handleHover(_ event: NSEvent? = nil) {
-        guard !showingSyncSettings, !syncSettingsInFlight, !PrivacyPolicyWindow.isVisible, !dragInteraction.preventsCollapse else { return }
+        guard !settingsKeepPanelOpen, !dragInteraction.preventsCollapse else { return }
         // Shrinking can move the edge past a stationary pointer. Wait for the
         // gesture/animation to finish before accepting a new hover-exit movement.
         guard !isPinching, resizeTimer == nil else { return }
@@ -805,9 +809,9 @@ final class IslandNoteController: NSObject {
                 let work = DispatchWorkItem { [weak self] in
                     guard let self else { return }
                     self.pendingCollapse = nil
-                    if self.mode == .expanded, !self.dragInteraction.preventsCollapse,
+                    if self.mode == .expanded, !self.settingsKeepPanelOpen, !self.dragInteraction.preventsCollapse,
                        !self.screenRect(self.rect(for: .expanded)).insetBy(dx: -6, dy: -4).contains(NSEvent.mouseLocation) {
-                        self.collapse()
+                        self.collapse(automatically: true)
                     }
                 }
                 pendingCollapse = work
@@ -827,12 +831,12 @@ final class IslandNoteController: NSObject {
     }
 
     private func handleClick(_ e: NSEvent?) {
-        guard !dragInteraction.preventsCollapse else { return }
+        guard !settingsKeepPanelOpen, !dragInteraction.preventsCollapse else { return }
         let loc = screenPoint(for: e)
         switch mode {
         case .expanded:
             if !screenRect(rect(for: .expanded)).insetBy(dx: -8, dy: -8).contains(loc) {
-                collapse()
+                collapse(automatically: true)
             }
         case .rest, .hover:
             if screenRect(rect(for: mode)).insetBy(dx: -8, dy: -8).contains(loc) {
@@ -866,12 +870,13 @@ final class IslandNoteController: NSObject {
 
     private func diagnosticState() -> InteractionDiagnosticState {
         let screen = (panel.screen ?? notchScreen()).visibleFrame
+        let target = pendingDockedSize ?? targetViewportSize ?? pinchSession?.rect.size
         return InteractionDiagnosticState(mode: String(describing: mode), floating: dragInteraction.isFloating,
             dragging: dragInteraction.isDragging, docking: dragInteraction.isDocking, edgeResizing: edgeResize != nil,
             animating: resizeTimer != nil, panelKey: panel.isKeyWindow, appActive: NSApp.isActive,
             reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
             width: expandedRect.width, height: expandedRect.height,
-            targetWidth: (pendingDockedSize ?? targetViewportSize).map { Double($0.width) }, targetHeight: (pendingDockedSize ?? targetViewportSize).map { Double($0.height) },
+            targetWidth: target.map { Double($0.width) }, targetHeight: target.map { Double($0.height) },
             screenWidth: screen.width, screenHeight: screen.height, resizeHoverEdges: lastResizeHover?.rawValue)
     }
 
@@ -880,7 +885,6 @@ final class IslandNoteController: NSObject {
     }
 
     @objc func showSettings() {
-        collapse()
         pendingCollapse?.cancel(); pendingCollapse = nil
         if settingsWindow == nil {
             let settings = SettingsWindowController(preferences: preferences, diagnostics: diagnostics)
@@ -1050,7 +1054,12 @@ final class IslandNoteController: NSObject {
         }
     }
 
-    func collapse() {
+    private var settingsKeepPanelOpen: Bool {
+        showingSyncSettings || syncSettingsInFlight || PrivacyPolicyWindow.isVisible
+    }
+
+    func collapse(automatically: Bool = false) {
+        guard !automatically || !settingsKeepPanelOpen else { return }
         if dragInteraction.preventsCollapse {
             dragInteraction.cancelAndDock(collapse: true)
             return
@@ -1065,7 +1074,8 @@ final class IslandNoteController: NSObject {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.finishingCollapse = false
-            guard self.mode == .expanded, !self.dragInteraction.preventsCollapse else { return }
+            guard self.mode == .expanded, !self.dragInteraction.preventsCollapse,
+                  !automatically || !self.settingsKeepPanelOpen else { return }
             self.editor.flushPending()
             guard self.store.flushSync() else { return }
             self.goTo(.rest)
@@ -1122,7 +1132,6 @@ final class IslandNoteController: NSObject {
     @objc func showSyncSettings() {
         guard !syncSettingsInFlight else { return }
         guard preferences.flomoEnabled else { showSettings(); return }
-        collapse()
         guard let sync else { FlomoSettings.error(L10n.tr("Sync settings could not be loaded. Your local note is still available.")); return }
         pendingCollapse?.cancel()
         pendingCollapse = nil

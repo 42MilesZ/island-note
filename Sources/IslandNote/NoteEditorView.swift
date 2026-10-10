@@ -41,6 +41,9 @@ private struct MarkdownEditorHost: View {
             automaticSpellingCorrection: false
         )
         config.paragraph = ParagraphStyle(spacingFactor: 0.2, lineHeightExtraSpacing: 3)
+        // Live resize reflows the visible text; expensive full-document height
+        // measurement and table rendering are committed once on release.
+        config.rendersTablesDuringLiveResize = false
         config.services.bus = MarkdownEditorBus(
             applyBoldRequest: .islandNoteBold,
             applyItalicRequest: .islandNoteItalic
@@ -113,6 +116,11 @@ final class NoteEditorView: NSView {
     let outlineModel = HeadingOutlineModel()
     private var outlineRefresh: DispatchWorkItem?
     private var geometryRefresh: DispatchWorkItem?
+    private weak var resizingScrollView: NSScrollView?
+    private weak var resizingTextView: NSTextView?
+    private var resizeFrameNotificationsWereEnabled = false
+    private var resizeBoundsNotificationsWereEnabled = false
+    private var resizeTextWasVerticallyResizable = false
     private var indexedSource = ""
     private var headingPositions: [(id: Int, y: CGFloat)] = []
     private var lastLayoutWidth: CGFloat = 0
@@ -143,6 +151,7 @@ final class NoteEditorView: NSView {
     /// A new native editor owns its undo stack; queued bindings from the old
     /// document are rejected so they cannot save into the newly selected file.
     func openDocument(_ text: String) {
+        endInteractiveResize()
         model.documentID = UUID().uuidString
         isComposing = false
         string = text
@@ -507,9 +516,49 @@ final class NoteEditorView: NSView {
 
     private func scheduleHeadingGeometry() {
         geometryRefresh?.cancel()
+        guard resizingScrollView == nil else { return }
         let work = DispatchWorkItem { [weak self] in self?.refreshHeadingGeometry() }
         geometryRefresh = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: work)
+    }
+
+    func beginInteractiveResize() {
+        guard resizingScrollView == nil, let scroll = hostedScrollView(in: hostingView) else { return }
+        geometryRefresh?.cancel()
+        geometryRefresh = nil
+        resizingScrollView = scroll
+        let text = hostedTextView(in: hostingView)
+        resizingTextView = text
+        resizeTextWasVerticallyResizable = text?.isVerticallyResizable ?? false
+        // Keep the existing document height while TextKit reflows the viewport.
+        // Otherwise its automatic height update forces another full-note measure.
+        text?.isVerticallyResizable = false
+        // The engine's clip-frame observer otherwise measures the entire note
+        // on every live width change, bypassing its own live-resize policy.
+        resizeFrameNotificationsWereEnabled = scroll.contentView.postsFrameChangedNotifications
+        resizeBoundsNotificationsWereEnabled = scroll.contentView.postsBoundsChangedNotifications
+        scroll.contentView.postsFrameChangedNotifications = false
+        scroll.contentView.postsBoundsChangedNotifications = false
+        scroll.viewWillStartLiveResize()
+    }
+
+    func endInteractiveResize() {
+        guard let scroll = resizingScrollView else { return }
+        resizingTextView?.isVerticallyResizable = resizeTextWasVerticallyResizable
+        resizingTextView = nil
+        // Commit the final hosting width before the engine flushes its tables.
+        layoutSubtreeIfNeeded()
+        resizingScrollView = nil
+        scroll.viewDidEndLiveResize()
+        scroll.contentView.postsFrameChangedNotifications = resizeFrameNotificationsWereEnabled
+        scroll.contentView.postsBoundsChangedNotifications = resizeBoundsNotificationsWereEnabled
+        if resizeFrameNotificationsWereEnabled {
+            NotificationCenter.default.post(name: NSView.frameDidChangeNotification, object: scroll.contentView)
+        }
+        if resizeBoundsNotificationsWereEnabled {
+            NotificationCenter.default.post(name: NSView.boundsDidChangeNotification, object: scroll.contentView)
+        }
+        scheduleHeadingGeometry()
     }
 
     private func refreshHeadingGeometry() {
