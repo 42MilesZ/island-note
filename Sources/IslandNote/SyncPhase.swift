@@ -52,6 +52,11 @@ enum SyncPhase: Equatable {
     }
 
     var isBusy: Bool { self == .checking || self == .syncing }
+    var inlineStatus: String? {
+        if isBusy { return L10n.tr("Syncing…") }
+        if self == .conflict || self == .mergeRequired { return L10n.tr("Conflict") }
+        return nil
+    }
     var needsAction: Bool {
         switch self {
         case .disconnected, .waiting, .checking, .syncing, .synced, .paused: return false

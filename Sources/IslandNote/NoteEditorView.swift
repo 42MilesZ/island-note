@@ -296,7 +296,8 @@ final class NoteEditorView: NSView {
             : (isFlomoEnabled ? phase.title : L10n.tr("Local save status")))
         let needsAction = isFlomoEnabled && phase.needsAction
         let isBusy = isFlomoEnabled && phase.isBusy
-        updateSyncExpansion(isBusy && localSaveError == nil)
+        updateSyncExpansion(localSaveError == nil && isFlomoEnabled ? phase.inlineStatus : nil,
+                            warning: needsAction)
         syncButton.setAccessibilityHelp(details)
 
         // A local write failure must remain visible even if Flomo reports success.
@@ -311,50 +312,83 @@ final class NoteEditorView: NSView {
         CATransaction.setDisableActions(true)
         statusDot.backgroundColor = color.cgColor
         CATransaction.commit()
-        statusDot.removeAnimation(forKey: "sync-busy")
-        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if (!isBusy || localSaveError != nil || reduceMotion), statusDot.animation(forKey: "sync-busy") != nil {
+            let opacity = statusDot.presentation()?.opacity ?? statusDot.opacity
+            statusDot.removeAnimation(forKey: "sync-busy")
+            let settle = CABasicAnimation(keyPath: "opacity")
+            settle.fromValue = opacity
+            settle.toValue = Float(1)
+            settle.duration = reduceMotion ? 0.08 : 0.16
+            settle.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            statusDot.add(settle, forKey: "status-opacity")
+        }
+        if !reduceMotion {
             let fade = CABasicAnimation(keyPath: "backgroundColor")
             fade.fromValue = previousColor
             fade.toValue = color.cgColor
             fade.duration = 0.18
             fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             statusDot.add(fade, forKey: "status-color")
-            if isBusy, localSaveError == nil {
+            if isBusy, localSaveError == nil, statusDot.animation(forKey: "sync-busy") == nil {
                 let pulse = CABasicAnimation(keyPath: "opacity")
-                pulse.fromValue = 0.4
-                pulse.toValue = 1
+                pulse.fromValue = statusDot.presentation()?.opacity ?? statusDot.opacity
+                pulse.toValue = Float(0.4)
                 pulse.duration = 0.8
                 pulse.autoreverses = true
                 pulse.repeatCount = .infinity
                 pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                statusDot.removeAnimation(forKey: "status-opacity")
                 statusDot.add(pulse, forKey: "sync-busy")
             }
         }
     }
 
-    /// Keep the right-hand dot anchored while the same control opens to the left.
-    private func updateSyncExpansion(_ expanded: Bool) {
+    /// Keep the right edge anchored; the dot leads the text as the control opens.
+    private func updateSyncExpansion(_ text: String?, warning: Bool) {
         guard let syncButtonWidth, let buttonLayer = syncButton.layer else { return }
-        let text = L10n.tr("Syncing…")
-        let textWidth = ceil((text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium)]).width)
+        let expanded = text != nil
+        let visibleText = text ?? (syncLabel.string as? String ?? "")
+        let textWidth = ceil((visibleText as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium)]).width)
         let width: CGFloat = expanded ? textWidth + 34 : 24
         let changesGeometry = syncButtonWidth.constant != width
         let previousBounds = buttonLayer.presentation()?.bounds ?? buttonLayer.bounds
         let previousPosition = buttonLayer.presentation()?.position ?? buttonLayer.position
-        let previousDotPosition = statusDot.presentation()?.position ?? statusDot.position
+        let changesText = text != nil && syncLabel.string as? String != visibleText
+        if changesText {
+            // Leave the currently visible text fading on its own layer. Rapid
+            // changes can overlap without an old completion hiding a new label.
+            let opacity = syncLabel.presentation()?.opacity ?? syncLabel.opacity
+            if opacity > 0 {
+                let outgoing = CATextLayer()
+                outgoing.font = syncLabel.font
+                outgoing.fontSize = syncLabel.fontSize
+                outgoing.contentsScale = syncLabel.contentsScale
+                outgoing.string = syncLabel.string
+                outgoing.frame = syncLabel.frame
+                outgoing.foregroundColor = syncLabel.presentation()?.foregroundColor ?? syncLabel.foregroundColor
+                outgoing.opacity = opacity
+                buttonLayer.insertSublayer(outgoing, below: syncLabel)
+                SettingsPalette.animate(outgoing, key: "opacity", value: Float(0), duration: 0.16)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) { outgoing.removeFromSuperlayer() }
+            }
+        }
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        syncLabel.string = text
-        syncLabel.frame = CGRect(x: 10, y: 4, width: textWidth, height: 16)
+        if changesText {
+            syncLabel.removeAnimation(forKey: "opacity")
+            syncLabel.opacity = 0
+        }
+        syncLabel.string = visibleText
+        syncLabel.frame = CGRect(x: 24, y: 4, width: textWidth, height: 16)
         syncButtonWidth.constant = width
         layoutSubtreeIfNeeded()
-        statusDot.position = CGPoint(x: width - 12, y: 12)
+        statusDot.position = CGPoint(x: 12, y: 12)
         CATransaction.commit()
         if changesGeometry {
             let duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.08 : 0.24
             for (layer, key, from) in [(buttonLayer, "bounds", NSValue(rect: previousBounds)),
-                                       (buttonLayer, "position", NSValue(point: previousPosition)),
-                                       (statusDot, "position", NSValue(point: previousDotPosition))] {
+                                       (buttonLayer, "position", NSValue(point: previousPosition))] {
                 let animation = CABasicAnimation(keyPath: key)
                 animation.fromValue = from
                 animation.toValue = layer.value(forKeyPath: key)
@@ -364,8 +398,24 @@ final class NoteEditorView: NSView {
             }
             onStatusWidthChanged?(width)
         }
-        SettingsPalette.animate(syncLabel, key: "opacity", value: expanded ? Float(1) : Float(0), duration: 0.16)
-        SettingsPalette.animate(buttonLayer, key: "backgroundColor", value: NSColor(white: 1, alpha: expanded ? 0.07 : 0).cgColor, duration: 0.24)
+        if changesText {
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = Float(0)
+            fade.toValue = Float(1)
+            fade.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.08 : 0.16
+            fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            syncLabel.opacity = 1
+            CATransaction.commit()
+            syncLabel.add(fade, forKey: "opacity")
+        } else {
+            SettingsPalette.animate(syncLabel, key: "opacity", value: expanded ? Float(1) : Float(0), duration: 0.16)
+        }
+        let amber = NSColor(red: 0.94, green: 0.70, blue: 0.38, alpha: 1)
+        SettingsPalette.animate(syncLabel, key: "foregroundColor", value: (warning ? amber : NSColor(white: 0.86, alpha: 1)).cgColor, duration: 0.24)
+        let background = expanded && warning ? amber.withAlphaComponent(0.12) : NSColor(white: 1, alpha: expanded ? 0.07 : 0)
+        SettingsPalette.animate(buttonLayer, key: "backgroundColor", value: background.cgColor, duration: 0.24)
     }
 
     private func setStatusHovered(_ hovered: Bool) {

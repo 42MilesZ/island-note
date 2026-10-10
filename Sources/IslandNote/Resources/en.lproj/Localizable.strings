@@ -96,6 +96,7 @@
 "Saved · Checking sync" = "Saved · Checking sync";
 "Saved · Syncing…" = "Saved · Syncing…";
 "Syncing…" = "Syncing…";
+"Conflict" = "Conflict";
 "Local edits are waiting to sync after typing stops." = "Local edits are waiting to sync after typing stops.";
 "Saved · Sync pending" = "Saved · Sync pending";
 "Saved · Sync paused" = "Saved · Sync paused";

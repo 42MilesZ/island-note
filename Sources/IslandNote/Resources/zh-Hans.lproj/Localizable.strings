@@ -96,6 +96,7 @@
 "Saved · Checking sync" = "已保存 · 正在检查同步";
 "Saved · Syncing…" = "已保存 · 正在同步…";
 "Syncing…" = "正在同步…";
+"Conflict" = "有冲突";
 "Local edits are waiting to sync after typing stops." = "本机修改将在停止输入后同步。";
 "Saved · Sync pending" = "已保存 · 等待同步";
 "Saved · Sync paused" = "已保存 · 同步已暂停";

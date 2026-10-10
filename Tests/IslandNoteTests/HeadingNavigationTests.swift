@@ -64,6 +64,13 @@ final class HeadingNavigationTests: XCTestCase {
         XCTAssertEqual(button.frame.width, 24)
         XCTAssertEqual(button.frame.maxX, rightEdge)
         XCTAssertTrue(hint.isHidden)
+        for phase in [SyncPhase.conflict, .mergeRequired] {
+            editor.showSyncStatus(phase, detail: "Review both copies")
+            settle(0.3)
+            XCTAssertGreaterThan(button.frame.width, 24)
+            XCTAssertEqual(button.frame.maxX, rightEdge)
+            XCTAssertTrue(hint.isHidden)
+        }
         editor.showSyncStatus(.syncing, detail: "Request in progress")
         editor.showSaveError("The local file is unavailable")
         XCTAssertEqual(button.frame.width, 24)
