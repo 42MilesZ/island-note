@@ -95,6 +95,13 @@ Keychain can recognize the same app. Switching from an old ad-hoc build may need
 one final Keychain approval. Normal updates then retain the same designated
 requirement; a locked Keychain can still require unlocking.
 
+For persistent local updates, quit Island Note normally and run `make install-local`.
+It uses the signed package, rejects ad-hoc signatures, checks that subsequent
+updates match the installed app's designated requirement, and retains a rollback
+bundle. Use `make package-dev` only for disposable tests without a saved Flomo
+token. If Xcode's command-line shim is unavailable, `SWIFT_BIN` can point to the
+installed Command Line Tools Swift executable without changing system settings.
+
 `NOTARY_PROFILE=your-keychain-profile make notarize` submits the signed bundle
 to Apple, waits for acceptance, staples the ticket, verifies Gatekeeper, and
 writes `dist/IslandNote.zip`. Notarization credentials stay in Keychain. Run

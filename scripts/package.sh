@@ -2,6 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 identity="${SIGN_IDENTITY:-}"
+swift_bin="${SWIFT_BIN:-swift}"
 if [[ -z "$identity" ]]; then
     identities=()
     while IFS= read -r item; do identities+=("$item"); done < <(
@@ -13,9 +14,9 @@ if [[ -z "$identity" ]]; then
     fi
     identity="${identities[0]}"
 fi
-swift build -c release --product IslandNote --disable-sandbox \
+"$swift_bin" build -c release --product IslandNote --disable-sandbox \
     -Xswiftc -debug-prefix-map -Xswiftc "$PWD=."
-bin_dir="$(swift build -c release --show-bin-path)"
+bin_dir="$("$swift_bin" build -c release --show-bin-path)"
 # Build a fresh bundle so stray files can never enter a signed release.
 staging="$(mktemp -d "$PWD/.build/package.XXXXXX")"
 app="$staging/IslandNote.app"

@@ -1,4 +1,4 @@
-.PHONY: all build icons package package-dev run notarize audit testflight
+.PHONY: all build icons package package-dev install-local run notarize audit testflight
 
 all: package
 
@@ -15,6 +15,10 @@ package:
 # Disposable development builds only: do not use with a saved Flomo token.
 package-dev:
 	SIGN_IDENTITY=- ./scripts/package.sh
+
+# Persistent local installs must retain a stable Keychain identity.
+install-local: package
+	./scripts/install-local.sh
 
 run: package
 	open IslandNote.app
