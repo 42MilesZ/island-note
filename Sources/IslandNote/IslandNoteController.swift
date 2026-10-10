@@ -130,6 +130,7 @@ final class IslandNoteController: NSObject {
         let floating: Bool
         var rect: NSRect
         var resumeSize: NSSize?
+        var motionSeed: PanelResizeMotion?
         var didResize = false
         var wasLimited = false
     }
@@ -138,6 +139,9 @@ final class IslandNoteController: NSObject {
     private var pendingDockedSize: NSSize?
     private let diagnostics: InteractionDiagnostics
     private var resizeTimer: Timer?
+    private var resizeMotion: PanelResizeMotion?
+    private var resizeTick: TimeInterval = 0
+    private var resizeMotionIsFloating = false
     private var floatingSize: NSSize?
     private var targetViewportSize: NSSize?
     private struct EdgeResize {
@@ -603,10 +607,11 @@ final class IslandNoteController: NSObject {
             let floating = dragInteraction.isFloating && !queued
             if !queued, !dragInteraction.prepareForResize() { return false }
             let resume = queued ? nil : targetViewportSize
+            let seed = queued ? nil : resizeMotion
             if !queued { stopViewportAnimation() }
             pendingCollapse?.cancel(); pendingCollapse = nil
             let initial = queued ? dockedScreenRect(size: pendingDockedSize ?? dockedSize) : screenRect(expandedRect)
-            pinchSession = PinchSession(floating: floating, rect: initial, resumeSize: resume)
+            pinchSession = PinchSession(floating: floating, rect: seed?.rect ?? initial, resumeSize: resume, motionSeed: seed)
             updateEditorResizeLifecycle()
             diagnostics.record(.continuousResizeBegan, state: diagnosticState())
         }
@@ -638,9 +643,7 @@ final class IslandNoteController: NSObject {
             pendingDockedSize = result.rect.size
             diagnostics.record(.resizeQueued, state: diagnosticState())
         } else {
-            // Direct manipulation must follow this event, without a spring tail.
-            stopViewportAnimation()
-            displayResize(result.rect, floating: session.floating)
+            followResize(to: result.rect, floating: session.floating)
         }
         return true
     }
@@ -652,6 +655,11 @@ final class IslandNoteController: NSObject {
         guard let session else { return }
         if session.didResize {
             if !dragInteraction.isDocking, resizeTimer == nil { diagnostics.record(.resizeCompleted, state: diagnosticState()) }
+        } else if let seed = session.motionSeed {
+            resizeMotion = seed
+            resizeMotionIsFloating = session.floating
+            resizeTick = ProcessInfo.processInfo.systemUptime
+            followResize(to: seed.target, floating: session.floating)
         } else if let resume = session.resumeSize {
             animateViewport(to: resume)
         }
@@ -684,6 +692,47 @@ final class IslandNoteController: NSObject {
         applyViewport(size: rect.size)
     }
 
+    private func followResize(to rect: NSRect, floating: Bool) {
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            stopViewportAnimation()
+            resizeMotionIsFloating = floating
+            displayResize(rect, floating: floating)
+            diagnostics.record(.resizeCompleted, state: diagnosticState())
+            return
+        }
+        if resizeMotion == nil {
+            // A docking/aspect timer can still own the viewport after arrival.
+            // Replace that timer before installing the continuous follow.
+            stopViewportAnimation()
+            resizeMotion = pinchSession?.motionSeed ?? PanelResizeMotion(rect: screenRect(expandedRect))
+            resizeTick = ProcessInfo.processInfo.systemUptime
+        }
+        resizeMotionIsFloating = floating
+        pinchSession?.motionSeed = nil
+        // Input only retargets the motion. Layout runs once per timer tick,
+        // keeping bursts of magnify events from accumulating synchronous work.
+        resizeMotion?.target = rect
+        targetViewportSize = rect.size
+        guard resizeTimer == nil else { return }
+        let timer = Timer(timeInterval: 1 / Double(max(60, panel.screen?.maximumFramesPerSecond ?? 60)), repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.advanceResize() }
+        }
+        resizeTimer = timer
+        updateEditorResizeLifecycle()
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func advanceResize() {
+        guard var motion = resizeMotion else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        motion.advance(by: now - resizeTick)
+        resizeTick = now
+        motion.constrain(to: magnifiedRect(motion.rect, delta: 0, floating: resizeMotionIsFloating).rect)
+        resizeMotion = motion
+        displayResize(motion.isSettled ? motion.target : motion.rect, floating: resizeMotionIsFloating)
+        if motion.isSettled { stopViewportAnimation(completed: true) }
+    }
+
     private func stopViewportAnimation(completed: Bool = false) {
         if let target = targetViewportSize {
             let reached = abs(target.width - expandedRect.width) < 0.5 && abs(target.height - expandedRect.height) < 0.5
@@ -692,6 +741,7 @@ final class IslandNoteController: NSObject {
         resizeTimer?.invalidate()
         resizeTimer = nil
         targetViewportSize = nil
+        resizeMotion = nil
         updateEditorResizeLifecycle()
     }
 

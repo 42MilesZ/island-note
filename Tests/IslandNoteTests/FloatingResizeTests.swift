@@ -229,8 +229,9 @@ final class FloatingResizeTests: XCTestCase {
             for delta: CGFloat in [0.01, 0.015, 0.02, 0.01, -0.03] {
                 XCTAssertTrue(controller.handleMagnification(delta: delta, phase: .changed, locationInWindow: location))
                 size.width *= 1 + delta; size.height *= 1 + delta
-                XCTAssertEqual(editor.frame.width, size.width, accuracy: 0.001)
-                XCTAssertEqual(editor.frame.height, size.height, accuracy: 0.001)
+                if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                    XCTAssertNotEqual(editor.frame.width, size.width, accuracy: 0.01)
+                }
                 settle(0.06)
                 let visible = screenRect(panel, editor)
                 XCTAssertEqual(visible.midX, initial.midX, accuracy: 1)
@@ -282,7 +283,7 @@ final class FloatingResizeTests: XCTestCase {
         }
     }
 
-    func testZeroMotionPinchRetainsSizeAndEdgeGrabHasNoResizeTail() throws {
+    func testZeroMotionPinchResumesFollowAndEdgeGrabCancelsItsTail() throws {
         try withPanel { controller, panel, editor, _ in
             let start = header(panel, editor)
             let release = NSPoint(x: start.x + 80, y: start.y - 170)
@@ -294,7 +295,10 @@ final class FloatingResizeTests: XCTestCase {
             pinch(controller, editor: editor, delta: 0.15)
             settle(0.08)
             let intermediate = editor.frame.size
-            XCTAssertEqual(intermediate.width, initial.width * 1.15, accuracy: 0.001)
+            if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                XCTAssertGreaterThan(intermediate.width, initial.width)
+                XCTAssertLessThan(intermediate.width, initial.width * 1.15)
+            }
             pinch(controller, editor: editor, delta: 0)
             XCTAssertEqual(editor.frame.width, intermediate.width, accuracy: 0.1)
             settle(1.1)
@@ -326,8 +330,9 @@ final class FloatingResizeTests: XCTestCase {
             for delta: CGFloat in [0.01, 0.015, 0.02, -0.025, 0.01] {
                 XCTAssertTrue(controller.handleMagnification(delta: delta, phase: .changed, locationInWindow: location))
                 size.width *= 1 + delta; size.height *= 1 + delta
-                XCTAssertEqual(editor.frame.width, size.width, accuracy: 0.001)
-                XCTAssertEqual(editor.frame.height, size.height, accuracy: 0.001)
+                if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                    XCTAssertNotEqual(editor.frame.width, size.width, accuracy: 0.01)
+                }
                 settle(0.06)
                 let visible = screenRect(panel, editor)
                 XCTAssertEqual(visible.maxY, initial.maxY, accuracy: 0.001)
@@ -360,7 +365,7 @@ final class FloatingResizeTests: XCTestCase {
         }
     }
 
-    func testDockedLimitsReverseImmediatelyAndZeroMotionRetainsSize() throws {
+    func testDockedLimitsReverseImmediatelyAndZeroMotionResumesFollow() throws {
         let diagnostics = InteractionDiagnostics(defaults: nil, enabled: true)
         try withPanel(diagnostics: diagnostics) { controller, panel, editor, _ in
             let initial = screenRect(panel, editor), home = panel.frame.origin
@@ -464,6 +469,7 @@ final class FloatingResizeTests: XCTestCase {
             // No mouse-up reaches the handle. The physical button has been released.
             XCTAssertTrue(controller.handleMagnification(delta: 0.01, phase: .began,
                 locationInWindow: location, pressedMouseButtons: 0))
+            settle()
             XCTAssertEqual(editor.frame.width, rect.width * 1.01, accuracy: 0.001)
             XCTAssertTrue(diagnostics.events.contains { $0.reason == .edgeResizeInterrupted })
             XCTAssertTrue(controller.handleMagnification(delta: 0, phase: .ended, locationInWindow: location))
@@ -504,7 +510,7 @@ final class FloatingResizeTests: XCTestCase {
         }
     }
 
-    func testRapidPinchOnLongNoteImmediatelyFollowsEveryDelta() throws {
+    func testRapidPinchOnLongNoteRetargetsWithoutSynchronousLayoutAndSettles() throws {
         let content = String(repeating: "## Heading\n\nA long paragraph with **formatting** and enough text to wrap on resize.\n\n", count: 600)
         try withPanel(content: content) { controller, _, editor, text in
             text.setSelectedRange(NSRange(location: 120, length: 12))
@@ -512,23 +518,23 @@ final class FloatingResizeTests: XCTestCase {
             let location = NSPoint(x: editor.frame.midX, y: editor.frame.midY)
             var size = editor.frame.size
             XCTAssertTrue(controller.handleMagnification(delta: 0, phase: .began, locationInWindow: location))
-            var durations: [Double] = []
-            for i in 0..<120 {
-                let delta: CGFloat = i % 2 == 0 ? 0.01 : -0.0099009900990099
-                let began = ProcessInfo.processInfo.systemUptime
+            // A burst must accumulate every logical delta without laying out each input.
+            let beforeBurst = editor.frame
+            let deltas = Array(repeating: CGFloat(0.009), count: 48) + Array(repeating: CGFloat(-0.006), count: 24)
+            for delta in deltas {
                 XCTAssertTrue(controller.handleMagnification(delta: delta, phase: .changed, locationInWindow: location))
-                durations.append(ProcessInfo.processInfo.systemUptime - began)
                 size.width *= 1 + delta; size.height *= 1 + delta
-                XCTAssertEqual(editor.frame.width, size.width, accuracy: 0.001)
-                XCTAssertEqual(editor.frame.height, size.height, accuracy: 0.001)
-                settle(0.008)
+                if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                    XCTAssertEqual(editor.frame, beforeBurst)
+                }
             }
             XCTAssertTrue(controller.handleMagnification(delta: 0, phase: .ended, locationInWindow: location))
+            settle(1.1)
+            XCTAssertEqual(editor.frame.width, size.width, accuracy: 0.001)
+            XCTAssertEqual(editor.frame.height, size.height, accuracy: 0.001)
             XCTAssertEqual(text.selectedRange(), selection)
-            let retained = editor.frame.size
-            settle(0.4)
-            XCTAssertEqual(editor.frame.size, retained)
-            print("Resize fixture: \(content.count) characters, 120 events, mean \(durations.reduce(0, +) / Double(durations.count) * 1000) ms, max \(durations.max()! * 1000) ms")
+            XCTAssertTrue(text.isVerticallyResizable)
+            XCTAssertTrue(try XCTUnwrap(text.enclosingScrollView).contentView.postsFrameChangedNotifications)
         }
     }
 
@@ -547,17 +553,21 @@ final class FloatingResizeTests: XCTestCase {
             XCTAssertFalse(scroll.contentView.postsFrameChangedNotifications)
             XCTAssertFalse(scroll.contentView.postsBoundsChangedNotifications)
             XCTAssertFalse(text.isVerticallyResizable)
+            settle(0.1)
             XCTAssertLessThan(try XCTUnwrap(text.textContainer).size.width, oldWidth)
             XCTAssertTrue(controller.handleMagnification(delta: 0, phase: .ended, locationInWindow: location))
+            settle(1.1)
             XCTAssertEqual(scroll.contentView.postsFrameChangedNotifications, originalFlag)
             XCTAssertEqual(scroll.contentView.postsBoundsChangedNotifications, originalBoundsFlag)
             XCTAssertEqual(text.isVerticallyResizable, originalVerticalResize)
             XCTAssertGreaterThan(try XCTUnwrap(scroll.documentView).frame.height, scroll.contentView.bounds.height)
             XCTAssertTrue(controller.handleMagnification(delta: 0.02, phase: .began, locationInWindow: location))
             XCTAssertTrue(controller.handleMagnification(delta: 0, phase: .cancelled, locationInWindow: location))
+            settle(1.1)
             XCTAssertEqual(scroll.contentView.postsFrameChangedNotifications, originalFlag)
             XCTAssertTrue(controller.handleMagnification(delta: 0.02, phase: .began, locationInWindow: location))
             NotificationCenter.default.post(name: NSWindow.didResignKeyNotification, object: panel)
+            settle(1.1)
             XCTAssertEqual(scroll.contentView.postsFrameChangedNotifications, originalFlag)
             XCTAssertEqual(scroll.contentView.postsBoundsChangedNotifications, originalBoundsFlag)
             XCTAssertEqual(text.isVerticallyResizable, originalVerticalResize)
@@ -566,6 +576,7 @@ final class FloatingResizeTests: XCTestCase {
             scroll.reflectScrolledClipView(scroll.contentView)
             XCTAssertGreaterThan(scroll.contentView.bounds.minY, 0)
             pinch(controller, editor: editor, delta: 0.01)
+            settle(1.1)
             XCTAssertEqual(scroll.contentView.postsFrameChangedNotifications, originalFlag)
         }
     }
@@ -590,6 +601,7 @@ final class FloatingResizeTests: XCTestCase {
                 settle(0.008)
             }
             XCTAssertTrue(controller.handleMagnification(delta: 0, phase: .ended, locationInWindow: location))
+            settle(1.1)
             XCTAssertGreaterThan(scroll.contentView.bounds.minY, 1000)
             XCTAssertLessThanOrEqual(scroll.contentView.bounds.maxY, try XCTUnwrap(scroll.documentView).bounds.height + 1)
             XCTAssertTrue(scroll.contentView.postsFrameChangedNotifications)
