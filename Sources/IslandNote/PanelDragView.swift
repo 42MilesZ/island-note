@@ -2,6 +2,7 @@ import AppKit
 
 /// Header-only dragging leaves native text selection and the status button intact.
 final class PanelDragView: NSView {
+    static let headerHeight: CGFloat = 30
     var onBegin: ((NSPoint) -> Void)?
     var onMove: ((NSPoint) -> Void)?
     var onEnd: ((NSPoint) -> Void)?

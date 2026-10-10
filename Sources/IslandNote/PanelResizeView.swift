@@ -202,6 +202,7 @@ final class PanelResizeView: NSView {
         let inside = Self.insideReach, outside = Self.outsideReach
         // Subtract the editor's full status-button footprint from both hover and clicks.
         let statusRect = NSRect(x: r.maxX - 15 - statusButtonWidth, y: r.maxY - 31, width: statusButtonWidth, height: 24)
+            .insetBy(dx: -StatusIndicatorButton.hoverPadding, dy: -StatusIndicatorButton.hoverPadding)
         for handle in handles {
             switch handle.edges {
             case .left: handle.frame = NSRect(x: r.minX - 7, y: r.minY + inside, width: 14, height: max(0, r.height - inside * 2))

@@ -253,7 +253,7 @@ final class NoteEditorView: NSView {
             dragHandle.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 28),
             dragHandle.trailingAnchor.constraint(equalTo: syncButton.leadingAnchor, constant: -8),
             dragHandle.centerYAnchor.constraint(equalTo: syncButton.centerYAnchor),
-            dragHandle.heightAnchor.constraint(equalTo: syncButton.heightAnchor),
+            dragHandle.heightAnchor.constraint(equalToConstant: PanelDragView.headerHeight),
         ])
         motionObservation = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
@@ -414,6 +414,7 @@ final class NoteEditorView: NSView {
         syncLabel.frame = CGRect(x: 22, y: 4, width: textWidth, height: 16)
         syncButtonWidth.constant = width
         layoutSubtreeIfNeeded()
+        syncButton.updateTrackingAreas()
         statusDot.position = CGPoint(x: expanded ? 15 : 12, y: 12)
         CATransaction.commit()
         if changesGeometry {
@@ -453,7 +454,7 @@ final class NoteEditorView: NSView {
         default: tint = NSColor(white: 0.86, alpha: 1)
         }
         SettingsPalette.animate(syncLabel, key: "foregroundColor", value: tint.cgColor, duration: 0.24)
-        let background = tint.withAlphaComponent(expanded ? 0.06 : 0)
+        let background = tint.withAlphaComponent(expanded ? 0.10 : 0)
         SettingsPalette.animate(buttonLayer, key: "backgroundColor", value: background.cgColor, duration: 0.24)
     }
 

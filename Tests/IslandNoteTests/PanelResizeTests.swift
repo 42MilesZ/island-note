@@ -68,7 +68,7 @@ final class PanelResizeTests: XCTestCase {
         let r = view.panelRect
         for point in [NSPoint(x: r.minX, y: r.midY), NSPoint(x: r.maxX, y: r.midY),
                       NSPoint(x: r.midX, y: r.minY), NSPoint(x: r.midX, y: r.maxY),
-                      NSPoint(x: r.minX + 12, y: r.minY + 12), NSPoint(x: r.maxX - 12, y: r.maxY - 12)] {
+                      NSPoint(x: r.minX + 12, y: r.minY + 12), NSPoint(x: r.maxX - 8, y: r.maxY - 12)] {
             XCTAssertNotNil(view.hitTest(point))
         }
         XCTAssertNil(view.hitTest(NSPoint(x: r.midX, y: r.midY)))
@@ -102,7 +102,7 @@ final class PanelResizeTests: XCTestCase {
             (NSPoint(x: r.minX + 32, y: r.minY + 32), [.left, .bottom]),
             (NSPoint(x: r.maxX - 32, y: r.minY + 32), [.right, .bottom]),
             (NSPoint(x: r.minX + 32, y: r.maxY - 32), [.left, .top]),
-            (NSPoint(x: r.maxX - 32, y: r.maxY - 33), [.right, .top]),
+            (NSPoint(x: r.maxX - 8, y: r.maxY - 33), [.right, .top]),
             (NSPoint(x: r.minX - 12, y: r.minY - 12), [.left, .bottom]),
             (NSPoint(x: r.maxX + 12, y: r.minY - 12), [.right, .bottom]),
             (NSPoint(x: r.minX - 12, y: r.maxY + 12), [.left, .top]),
@@ -129,7 +129,8 @@ final class PanelResizeTests: XCTestCase {
             handle.mouseDown(with: event)
             XCTAssertEqual(receivedEdges, edges)
         }
-        for point in [NSPoint(x: r.maxX - 16, y: r.maxY - 8), NSPoint(x: r.maxX - 27, y: r.maxY - 19),
+        for point in [NSPoint(x: r.maxX - 12, y: r.maxY - 12), NSPoint(x: r.maxX - 32, y: r.maxY - 33),
+                      NSPoint(x: r.maxX - 16, y: r.maxY - 8), NSPoint(x: r.maxX - 27, y: r.maxY - 19),
                       NSPoint(x: r.midX, y: r.maxY - 19), NSPoint(x: r.midX, y: r.midY)] {
             XCTAssertNil(view.resizeCursor(at: point))
             for handle in view.subviews {

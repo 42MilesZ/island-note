@@ -47,8 +47,8 @@ final class PanelDragTests: XCTestCase {
         let editor = NoteEditorView(frame: NSRect(origin: .zero, size: PanelSize.standard.dimensions))
         editor.layoutSubtreeIfNeeded()
         let header = editor.dragHandle.frame
-        XCTAssertEqual(header.height, 24)
-        XCTAssertEqual(header.maxY, editor.bounds.maxY - 7)
+        XCTAssertEqual(header.height, 30)
+        XCTAssertEqual(header.maxY, editor.bounds.maxY - 4)
         XCTAssertTrue(editor.hitTest(NSPoint(x: header.midX, y: header.midY)) === editor.dragHandle)
         XCTAssertFalse(editor.hitTest(NSPoint(x: editor.bounds.maxX - 27, y: header.midY)) === editor.dragHandle)
         XCTAssertFalse(editor.hitTest(NSPoint(x: header.midX, y: header.minY - 20)) === editor.dragHandle)
