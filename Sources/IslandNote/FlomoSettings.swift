@@ -2,9 +2,27 @@ import AppKit
 
 @MainActor
 enum FlomoSettings {
-    static func show(_ sync: FlomoSync) {
-        if sync.record.enabled, let conflict = sync.conflict {
+    static func show(_ sync: FlomoSync) async {
+        guard !sync.isStopped else { return }
+        if sync.record.enabled, [.conflict, .mergeRequired, .formattingChanged, .verifyWrite].contains(sync.phase) {
+            await sync.prepareReview()
+            guard !sync.isStopped else { return }
+        }
+        if !sync.requiresReconnection, let conflict = sync.conflict {
             review(conflict, sync: sync)
+            return
+        }
+        if [.connectionFailed, .offline, .unsupported, .tooLong, .failed, .rateLimited, .localChanged].contains(sync.phase)
+            || (!sync.record.enabled && sync.record.reviewPhase != nil) {
+            let alert = NSAlert()
+            alert.messageText = sync.phase.title
+            alert.informativeText = sync.status
+            alert.addButton(withTitle: L10n.tr("OK"))
+            alert.addButton(withTitle: sync.record.enabled ? L10n.tr("Sync Now") : L10n.tr("Resume Sync"))
+            alert.buttons[1].isEnabled = !sync.isBusy
+            if alert.runModal() == .alertSecondButtonReturn {
+                if sync.record.enabled { sync.request() } else { sync.resume() }
+            }
             return
         }
         var draftToken = ""
@@ -81,7 +99,7 @@ enum FlomoSettings {
         }
     }
 
-    private final class SecondaryActions: NSObject {
+    @MainActor private final class SecondaryActions: NSObject {
         @objc func findMemo() { NSApp.stopModal(withCode: NSApplication.ModalResponse(rawValue: 1005)) }
         @objc func getToken() { NSApp.stopModal(withCode: NSApplication.ModalResponse(rawValue: 1003)) }
         @objc func syncNow() { NSApp.stopModal(withCode: NSApplication.ModalResponse(rawValue: 1004)) }
@@ -108,8 +126,10 @@ enum FlomoSettings {
         alert.addButton(withTitle: L10n.tr("Use Island Note"))
         alert.addButton(withTitle: L10n.tr("Cancel"))
         alert.addButton(withTitle: L10n.tr("Use Flomo"))
-        alert.addButton(withTitle: L10n.tr("Pause Sync"))
-        alert.addButton(withTitle: L10n.tr("Merge Both")).isEnabled = sync.record.pendingWrite == nil
+        alert.addButton(withTitle: sync.record.enabled ? L10n.tr("Pause Sync") : L10n.tr("Resume Sync"))
+        alert.addButton(withTitle: L10n.tr("Merge Both")).isEnabled = sync.record.enabled && sync.record.pendingWrite == nil
+        alert.buttons[0].isEnabled = sync.record.enabled
+        alert.buttons[2].isEnabled = sync.record.enabled
         let stack = NSStackView()
         stack.orientation = .horizontal
         stack.spacing = 12
@@ -141,7 +161,8 @@ enum FlomoSettings {
         switch result {
         case .alertFirstButtonReturn: choice = .local
         case .alertThirdButtonReturn: choice = .remote
-        case NSApplication.ModalResponse(rawValue: 1003): sync.pause(); return
+        case NSApplication.ModalResponse(rawValue: 1003):
+            if sync.record.enabled { sync.pause() } else { sync.resume() }; return
         case NSApplication.ModalResponse(rawValue: 1004): choice = .merge
         default: return
         }

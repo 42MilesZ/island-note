@@ -253,3 +253,37 @@
 "About Local Diagnostics" = "了解本机诊断";
 "Save this note at a new location. The previous file is kept and its sync is paused." = "将当前笔记保存到新位置，原文件保留，旧位置的同步暂停。";
 "Edit an existing file and save back to it. It keeps its own Flomo connection." = "打开并编辑已有文件，保存回该文件，使用它自己的 Flomo 连接。";
+
+"Flomo · Offline" = "Flomo · 离线";
+
+"Saved · Offline" = "已保存 · 离线";
+
+"Flomo · Content differs — Review" = "Flomo · 内容不一致 — 查看";
+
+"Content differs · Click to review" = "内容不一致 · 点击查看";
+
+"Content differs" = "内容不一致";
+
+"Sync unconfirmed" = "同步未确认";
+
+"Memo unconfirmed" = "创建未确认";
+
+"Unsupported format" = "格式不支持";
+
+"Note too long" = "内容过长";
+
+"Connection failed" = "连接失败";
+
+"Sync failed" = "同步失败";
+
+"Not saved" = "未保存";
+
+"Loading note…" = "正在读取…";
+
+"Saving locally…" = "正在保存…";
+
+"Your Mac is offline. Sync will retry automatically." = "Mac 当前离线，恢复连接后将自动重试同步。";
+
+"The verified Flomo content differs from the uploaded note. Review both copies before continuing." = "Flomo 实际保存的内容与上传内容不一致，请查看两份内容后再继续。";
+
+"Review the latest local and Flomo copies before continuing." = "请查看本地和 Flomo 的最新内容后再继续。";

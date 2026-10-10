@@ -253,3 +253,37 @@
 "About Local Diagnostics" = "About Local Diagnostics";
 "Save this note at a new location. The previous file is kept and its sync is paused." = "Save this note at a new location. The previous file is kept and its sync is paused.";
 "Edit an existing file and save back to it. It keeps its own Flomo connection." = "Edit an existing file and save back to it. It keeps its own Flomo connection.";
+
+"Flomo · Offline" = "Flomo · Offline";
+
+"Saved · Offline" = "Saved · Offline";
+
+"Flomo · Content differs — Review" = "Flomo · Content differs — Review";
+
+"Content differs · Click to review" = "Content differs · Click to review";
+
+"Content differs" = "Content differs";
+
+"Sync unconfirmed" = "Sync unconfirmed";
+
+"Memo unconfirmed" = "Memo unconfirmed";
+
+"Unsupported format" = "Unsupported format";
+
+"Note too long" = "Note too long";
+
+"Connection failed" = "Connection failed";
+
+"Sync failed" = "Sync failed";
+
+"Not saved" = "Not saved";
+
+"Loading note…" = "Loading note…";
+
+"Saving locally…" = "Saving locally…";
+
+"Your Mac is offline. Sync will retry automatically." = "Your Mac is offline. Sync will retry automatically.";
+
+"The verified Flomo content differs from the uploaded note. Review both copies before continuing." = "The verified Flomo content differs from the uploaded note. Review both copies before continuing.";
+
+"Review the latest local and Flomo copies before continuing." = "Review the latest local and Flomo copies before continuing.";

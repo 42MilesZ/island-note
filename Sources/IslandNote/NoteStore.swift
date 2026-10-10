@@ -30,6 +30,7 @@ final class NoteStore {
     private let debounceInterval: TimeInterval = 0.18
     private(set) var lastErrorMessage: String?
 
+    var onSaveState: ((LocalSaveState) -> Void)?
     var onSaved: (() -> Void)?
     var onSyncNeeded: (() -> Void)?
     var onSaveError: ((String) -> Void)?
@@ -222,6 +223,7 @@ final class NoteStore {
         }
         let text = try String(contentsOf: fileURL, encoding: .utf8)
         lastLoadedContent = text
+        onSaveState?(.saved)
         return text
     }
 
@@ -229,9 +231,11 @@ final class NoteStore {
     func refreshIfClean() throws -> String? {
         guard pending == nil else { return nil }
         let diskText = try String(contentsOf: fileURL, encoding: .utf8)
-        guard diskText != lastLoadedContent else { return nil }
+        let changed = diskText != lastLoadedContent
         lastLoadedContent = diskText
-        return diskText
+        lastErrorMessage = nil
+        onSaveState?(.saved)
+        return changed ? diskText : nil
     }
 
     func save(_ text: String) {
@@ -239,9 +243,11 @@ final class NoteStore {
         saveWork = nil
         if text == lastLoadedContent {
             pending = nil
+            if lastErrorMessage == nil { onSaveState?(.saved) }
             return
         }
         pending = text
+        onSaveState?(.saving)
         let work = DispatchWorkItem { [weak self] in
             _ = self?.flushSync()
         }
@@ -260,6 +266,7 @@ final class NoteStore {
             lastLoadedContent = text
             pending = nil
             lastErrorMessage = nil
+            onSaveState?(.saved)
             onSaved?()
             onSyncNeeded?()
             return true
@@ -267,6 +274,7 @@ final class NoteStore {
             let message = "Could not save to \(fileURL.path): \(error.localizedDescription)"
             lastErrorMessage = message
             NSLog("IslandNote: %@", message)
+            onSaveState?(.failed(message))
             onSaveError?(message)
             return false
         }
@@ -278,6 +286,7 @@ final class NoteStore {
         try coordinatedWrite(text, expected: expected)
         lastLoadedContent = text
         lastErrorMessage = nil
+        onSaveState?(.saved)
         onSaved?()
     }
 

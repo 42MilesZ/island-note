@@ -99,8 +99,12 @@ final class NoteEditorView: NSView {
     private var syncDetail = "Flomo is not connected. Click to set up sync."
     private var displayedSyncPhase = SyncPhase.disconnected
     private var localSaveError: String?
-    private var showingSavePulse = false
-    private var savedPulse: DispatchWorkItem?
+    private var localSaveState = LocalSaveState.loading
+    private var checkingExpansionWork: DispatchWorkItem?
+    private var checkingExpanded = false
+    private var motionObservation: NSObjectProtocol?
+    private var compositionObservations: [NSObjectProtocol] = []
+    private var isComposing = false
     private var statusHoverWork: DispatchWorkItem?
     private var isStatusHovered = false
     private var showsHoverStatus = false
@@ -117,6 +121,7 @@ final class NoteEditorView: NSView {
     private var scrollMonitor: Any?
     private let logger = Logger(subsystem: "local.projects.island-note", category: "Outline")
 
+    var motionIsReduced: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     var onTextChanged: ((String) -> Void)?
     var onRequestCollapse: (() -> Void)?
     var onRequestQuit: (() -> Void)?
@@ -140,8 +145,9 @@ final class NoteEditorView: NSView {
     /// document are rejected so they cannot save into the newly selected file.
     func openDocument(_ text: String) {
         model.documentID = UUID().uuidString
+        isComposing = false
         string = text
-        localSaveError = nil
+        showLocalSaveState(.saved)
         showSyncStatus(.disconnected, detail: L10n.tr("Flomo not connected"))
     }
 
@@ -246,6 +252,25 @@ final class NoteEditorView: NSView {
             dragHandle.centerYAnchor.constraint(equalTo: syncButton.centerYAnchor),
             dragHandle.heightAnchor.constraint(equalTo: syncButton.heightAnchor),
         ])
+        motionObservation = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.refreshStatusIndicator() }
+        // The engine intentionally defers its binding while an IME owns marked
+        // text. Observe that stage without replacing its native text delegate.
+        for name in [NSText.didChangeNotification, NSTextView.didChangeSelectionNotification] {
+            compositionObservations.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] notification in
+                guard let self, let textView = notification.object as? NSTextView,
+                      textView.isDescendant(of: self.hostingView) else { return }
+                DispatchQueue.main.async { [weak self, weak textView] in
+                    guard let self, let textView, textView.isDescendant(of: self.hostingView) else { return }
+                    let composing = textView.hasMarkedText()
+                    guard composing != self.isComposing else { return }
+                    self.isComposing = composing
+                    if composing && self.displayedSyncPhase == .synced { self.displayedSyncPhase = .waiting }
+                    self.refreshStatusIndicator()
+                }
+            })
+        }
         refreshStatusIndicator()
     }
 
@@ -259,8 +284,21 @@ final class NoteEditorView: NSView {
     }
 
     func showSyncStatus(_ phase: SyncPhase, detail: String) {
+        let wasBusy = displayedSyncPhase.isBusy && checkingExpanded
+        checkingExpansionWork?.cancel()
+        checkingExpansionWork = nil
         displayedSyncPhase = phase
         syncDetail = detail
+        checkingExpanded = phase == .syncing || (phase == .checking && wasBusy)
+        if phase == .checking && !checkingExpanded {
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, self.displayedSyncPhase == .checking else { return }
+                self.checkingExpanded = true
+                self.refreshStatusIndicator()
+            }
+            checkingExpansionWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+        }
         refreshStatusIndicator()
     }
 
@@ -281,33 +319,36 @@ final class NoteEditorView: NSView {
 
     private func refreshStatusIndicator() {
         let phase = displayedSyncPhase
-        let localDetail = localSaveError.map { L10n.tr("Local save failed: ") + $0 }
-            ?? (showingSavePulse ? L10n.tr("Saved locally just now.") : L10n.tr("Your note is saved on this Mac."))
+        let currentLocalState: LocalSaveState = isComposing && localSaveError == nil ? .saving : localSaveState
+        let presentation = StatusPresentation(local: currentLocalState, phase: phase, flomoEnabled: isFlomoEnabled,
+                                              hovered: showsHoverStatus, checkingExpanded: checkingExpanded)
+        let localDetail: String
+        switch currentLocalState {
+        case .loading: localDetail = L10n.tr("Loading note…")
+        case .saving: localDetail = L10n.tr("Saving locally…")
+        case .saved: localDetail = L10n.tr("Your note is saved on this Mac.")
+        case .failed(let message): localDetail = L10n.tr("Local save failed: ") + message
+        }
         let details = isFlomoEnabled ? localDetail + "\n" + phase.title + "\n" + syncDetail : localDetail
-        syncButton.setAccessibilityLabel(localSaveError != nil ? L10n.tr("Local save failed")
-            : (isFlomoEnabled ? phase.title : L10n.tr("Local save status")))
-        let needsAction = isFlomoEnabled && phase.needsAction
-        let isBusy = isFlomoEnabled && phase.isBusy
-        let hoverText = localSaveError != nil ? L10n.tr("Not saved · Click for details")
-            : (isFlomoEnabled ? phase.hoverSummary : L10n.tr("Saved locally"))
-        let inlineText = showsHoverStatus ? hoverText
-            : (localSaveError == nil && isFlomoEnabled ? phase.inlineStatus : nil)
-        updateSyncExpansion(inlineText, warning: needsAction, error: localSaveError != nil)
+        syncButton.setAccessibilityLabel(localSaveError != nil ? L10n.tr("Local save failed") : presentation.summary)
+        let isBusy = presentation.tone == .busy
+        updateSyncExpansion(presentation.caption, tone: presentation.tone)
         syncButton.setAccessibilityHelp(details)
 
-        // A local write failure must remain visible even if Flomo reports success.
-        // A successful local save must not hide a sync conflict or connection error.
         let color: NSColor
-        if localSaveError != nil { color = .systemRed }
-        else if needsAction { color = NSColor(red: 0.94, green: 0.70, blue: 0.38, alpha: 1) }
-        else if showingSavePulse && !isBusy { color = NSColor(red: 0.55, green: 0.80, blue: 0.67, alpha: 1) }
-        else { color = NSColor(white: isBusy ? 0.68 : 0.40, alpha: 1) }
+        switch presentation.tone {
+        case .error: color = .systemRed
+        case .warning: color = NSColor(red: 0.94, green: 0.70, blue: 0.38, alpha: 1)
+        case .success: color = NSColor(red: 0.55, green: 0.80, blue: 0.67, alpha: 1)
+        case .busy: color = NSColor(white: 0.68, alpha: 1)
+        case .neutral: color = NSColor(white: 0.40, alpha: 1)
+        }
         let previousColor = statusDot.presentation()?.backgroundColor ?? statusDot.backgroundColor
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         statusDot.backgroundColor = color.cgColor
         CATransaction.commit()
-        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        let reduceMotion = motionIsReduced()
         if (!isBusy || localSaveError != nil || reduceMotion), statusDot.animation(forKey: "sync-busy") != nil {
             let opacity = statusDot.presentation()?.opacity ?? statusDot.opacity
             statusDot.removeAnimation(forKey: "sync-busy")
@@ -340,7 +381,7 @@ final class NoteEditorView: NSView {
     }
 
     /// Keep the right edge anchored; the dot leads the text as the control opens.
-    private func updateSyncExpansion(_ text: String?, warning: Bool, error: Bool) {
+    private func updateSyncExpansion(_ text: String?, tone: StatusPresentation.Tone) {
         guard let syncButtonWidth, let buttonLayer = syncButton.layer else { return }
         let expanded = text != nil
         let visibleText = text ?? (syncLabel.string as? String ?? "")
@@ -385,7 +426,7 @@ final class NoteEditorView: NSView {
         statusDot.position = CGPoint(x: expanded ? 15 : 12, y: 12)
         CATransaction.commit()
         if changesGeometry {
-            let duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.08 : 0.24
+            let duration = motionIsReduced() ? 0.08 : 0.24
             for (layer, key, from) in [(buttonLayer, "bounds", NSValue(rect: previousBounds)),
                                        (buttonLayer, "position", NSValue(point: previousPosition)),
                                        (statusDot, "position", NSValue(point: previousDotPosition))] {
@@ -402,7 +443,7 @@ final class NoteEditorView: NSView {
             let fade = CABasicAnimation(keyPath: "opacity")
             fade.fromValue = Float(0)
             fade.toValue = Float(1)
-            fade.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.08 : 0.16
+            fade.duration = motionIsReduced() ? 0.08 : 0.16
             fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             CATransaction.begin()
             CATransaction.setDisableActions(true)
@@ -413,9 +454,15 @@ final class NoteEditorView: NSView {
             SettingsPalette.animate(syncLabel, key: "opacity", value: expanded ? Float(1) : Float(0), duration: 0.16)
         }
         let amber = NSColor(red: 0.94, green: 0.70, blue: 0.38, alpha: 1)
-        let tint = error ? NSColor.systemRed : warning ? amber : NSColor(white: 0.86, alpha: 1)
+        let tint: NSColor
+        switch tone {
+        case .error: tint = .systemRed
+        case .warning: tint = amber
+        case .success: tint = NSColor(red: 0.55, green: 0.80, blue: 0.67, alpha: 1)
+        default: tint = NSColor(white: 0.86, alpha: 1)
+        }
         SettingsPalette.animate(syncLabel, key: "foregroundColor", value: tint.cgColor, duration: 0.24)
-        let background = expanded && (warning || error) ? tint.withAlphaComponent(0.12) : NSColor(white: 1, alpha: expanded ? 0.07 : 0)
+        let background = expanded && (tone == .warning || tone == .error) ? tint.withAlphaComponent(0.12) : NSColor(white: 1, alpha: expanded ? 0.07 : 0)
         SettingsPalette.animate(buttonLayer, key: "backgroundColor", value: background.cgColor, duration: 0.24)
     }
 
@@ -594,6 +641,9 @@ final class NoteEditorView: NSView {
 
     deinit {
         statusHoverWork?.cancel()
+        checkingExpansionWork?.cancel()
+        if let motionObservation { NSWorkspace.shared.notificationCenter.removeObserver(motionObservation) }
+        for observation in compositionObservations { NotificationCenter.default.removeObserver(observation) }
         outlineRefresh?.cancel()
         geometryRefresh?.cancel()
         navigationTimer?.invalidate()
@@ -626,26 +676,20 @@ final class NoteEditorView: NSView {
         onTextChanged?(model.text)
     }
 
-    func flashSavedIndicator() {
-        savedPulse?.cancel()
-        localSaveError = nil
-        showingSavePulse = true
+    func showLocalSaveState(_ state: LocalSaveState) {
+        // A new edit must not erase a previous failed write until a durable save
+        // succeeds. Sync warnings remain independently visible after that save.
+        if state == .saving, localSaveError != nil { return }
+        localSaveState = state
+        if state == .saving && displayedSyncPhase == .synced { displayedSyncPhase = .waiting }
+        if case .failed(let message) = state { localSaveError = message }
+        else { localSaveError = nil }
         refreshStatusIndicator()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.showingSavePulse = false
-            self.refreshStatusIndicator()
-        }
-        savedPulse = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: work)
     }
 
-    func showSaveError(_ message: String) {
-        savedPulse?.cancel()
-        showingSavePulse = false
-        localSaveError = message
-        refreshStatusIndicator()
-    }
+    func flashSavedIndicator() { showLocalSaveState(.saved) }
+
+    func showSaveError(_ message: String) { showLocalSaveState(.failed(message)) }
 
     /// Esc closes the island; undo stays scoped to the editor's document.
     func handleKey(_ event: NSEvent) -> NSEvent? {
@@ -706,7 +750,7 @@ final class NoteEditorView: NSView {
             alert.informativeText = localSaveError
             alert.runModal()
         } else {
-            if isFlomoEnabled, displayedSyncPhase.needsAction { onRequestSync?() }
+            if isFlomoEnabled { onRequestSync?() }
             else { onRequestSettings?() }
         }
     }

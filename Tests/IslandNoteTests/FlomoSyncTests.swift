@@ -445,7 +445,7 @@ final class FlomoSyncTests: XCTestCase {
         XCTAssertNil(sync.record.lastVerifiedAt)
         XCTAssertEqual(client.updates, 0)
         sync.pause()
-        XCTAssertEqual(sync.phase, .paused)
+        XCTAssertEqual(sync.phase, .mergeRequired, "Pause must not hide an unresolved difference")
     }
 
     func testNetworkFailureHasAnActionableState() async throws {
@@ -512,6 +512,125 @@ final class FlomoSyncTests: XCTestCase {
         XCTAssertEqual(sync.record.baseline, "Local")
         XCTAssertNil(sync.record.pendingWrite)
         sync.pause()
+    }
+
+    func testConflictSurvivesOfflinePauseAndRestart() async throws {
+        let (sync, url) = try make()
+        let client = FakeFlomo()
+        client.memo = FlomoMemo(id: "test", content: "Remote edit", updatedAt: "v2")
+        sync.readLocal = { "Local edit" }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(sync.phase, .conflict)
+        client.fetchError = FlomoClientError.offline
+        await sync.synchronize()
+        XCTAssertEqual(sync.phase, .conflict)
+        XCTAssertEqual(client.updates, 0)
+        sync.pause()
+        XCTAssertEqual(sync.phase, .conflict)
+        let restarted = try FlomoSync(stateURL: url)
+        restarted.start(client: client)
+        XCTAssertEqual(restarted.phase, .conflict)
+        restarted.stop()
+    }
+
+    func testUncertainWriteSurvivesLaterAuthenticationFailure() async throws {
+        let (sync, _) = try make()
+        let client = FakeFlomo()
+        client.updateError = FlomoClientError.unknownWriteOutcome
+        sync.readLocal = { "Local" }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(sync.phase, .verifyWrite)
+        client.fetchError = FlomoClientError.authentication
+        await sync.synchronize()
+        XCTAssertEqual(sync.record.pendingWrite, "Local", "An unrelated read failure cannot clear a write intent")
+        XCTAssertEqual(sync.phase, .verifyWrite)
+        XCTAssertTrue(sync.requiresReconnection)
+        sync.pause()
+        XCTAssertEqual(sync.phase, .verifyWrite)
+    }
+
+    func testRejectedConditionalWriteCanPrepareReadOnlyReview() async throws {
+        let (sync, _) = try make()
+        let client = FakeFlomo()
+        client.updateError = FlomoClientError.conflict
+        sync.readLocal = { "Local" }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(sync.phase, .conflict)
+        XCTAssertNil(sync.record.pendingWrite, "A rejected write was not accepted by Flomo")
+        let writes = client.updates
+        client.memo = FlomoMemo(id: "test", content: "Latest remote", updatedAt: "v3")
+        await sync.prepareReview()
+        XCTAssertEqual(sync.conflict?.remote.content, "Latest remote")
+        XCTAssertEqual(client.updates, writes)
+        XCTAssertEqual(sync.record.baseline, "Base")
+        sync.pause()
+    }
+
+    func testCreateOfflineBeforeWriteIsNotAnUncertainCreate() async throws {
+        let (sync, _) = try make(SyncRecord(enabled: true))
+        let client = FakeFlomo()
+        client.createError = FlomoClientError.writeNotIssued(.offline)
+        sync.readLocal = { "Local" }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(sync.phase, .offline)
+        XCTAssertFalse(sync.record.creationUncertain)
+        XCTAssertNil(sync.record.pendingWrite)
+        sync.pause()
+    }
+
+    func testIntentPersistenceFailureBeforeSendDoesNotClaimCreationUncertainty() async throws {
+        let (sync, url) = try make(SyncRecord(enabled: true))
+        try FileManager.default.removeItem(at: url)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+        let client = FakeFlomo()
+        sync.readLocal = { "Local" }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(client.creates, 0)
+        XCTAssertFalse(sync.record.creationUncertain)
+        XCTAssertEqual(sync.phase, .failed)
+        sync.stop()
+    }
+
+    func testPauseBeforeSendingReturnsToPausedInsteadOfUncertain() async throws {
+        let (sync, _) = try make(SyncRecord(enabled: true))
+        let client = FakeFlomo()
+        sync.readLocal = { "Local" }
+        client.onCreate = { sync.pause() }
+        client.createError = FlomoClientError.cancelledBeforeWrite
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(sync.phase, .paused)
+        XCTAssertFalse(sync.record.creationUncertain)
+        XCTAssertNil(sync.record.pendingWrite)
+    }
+
+    func testSaveStateTracksContinuousInputAndActualDiskWrite() throws {
+        let (_, stateURL) = try make()
+        let url = stateURL.deletingLastPathComponent().appendingPathComponent("note.md")
+        try "Base".write(to: url, atomically: true, encoding: .utf8)
+        let store = NoteStore(fileURL: url)
+        var state = LocalSaveState.loading
+        store.onSaveState = { state = $0 }
+        _ = try store.load()
+        XCTAssertEqual(state, .saved)
+        for index in 0..<20 {
+            store.save("Edit \(index)")
+            XCTAssertEqual(state, .saving)
+            XCTAssertEqual(try String(contentsOf: url), "Base")
+        }
+        XCTAssertTrue(store.flushSync())
+        XCTAssertEqual(state, .saved)
+        XCTAssertEqual(try String(contentsOf: url), "Edit 19")
+        try "External".write(to: url, atomically: true, encoding: .utf8)
+        store.save("Unsaved")
+        XCTAssertFalse(store.flushSync())
+        guard case .failed = state else { return XCTFail("Must show failed local save") }
+        XCTAssertEqual(try String(contentsOf: url), "External")
     }
 
     func testLocalStoreRefusesExternalChangeDuringPull() throws {

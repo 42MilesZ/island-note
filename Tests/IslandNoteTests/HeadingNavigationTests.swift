@@ -33,6 +33,7 @@ final class HeadingNavigationTests: XCTestCase {
         window.contentView = editor
         editor.string = "# A note\n\nText remains editable during sync."
         editor.setEditingEnabled(true)
+        editor.showLocalSaveState(.saved)
         editor.setFlomoEnabled(true)
         editor.layoutSubtreeIfNeeded()
         let button = try XCTUnwrap(find(StatusIndicatorButton.self, in: editor))
@@ -67,10 +68,10 @@ final class HeadingNavigationTests: XCTestCase {
             settle(0.3)
             XCTAssertGreaterThan(button.frame.width, 24)
             XCTAssertEqual(button.frame.maxX, rightEdge)
-            }
+        }
         editor.showSyncStatus(.syncing, detail: "Request in progress")
         editor.showSaveError("The local file is unavailable")
-        XCTAssertEqual(button.frame.width, 24)
+        XCTAssertGreaterThan(button.frame.width, 24)
         XCTAssertEqual(button.accessibilityLabel(), L10n.tr("Local save failed"))
         editor.flashSavedIndicator()
         XCTAssertGreaterThan(button.frame.width, 24, "A local save pulse must not hide ongoing sync")
@@ -99,8 +100,12 @@ final class HeadingNavigationTests: XCTestCase {
         settle()
         XCTAssertEqual(text.string, "New Original text")
         XCTAssertEqual(editor.string, "New Original text")
+        editor.showLocalSaveState(.saved)
         text.setMarkedText("ni", selectedRange: NSRange(location: 2, length: 0), replacementRange: NSRange(location: 0, length: 0))
         XCTAssertTrue(editor.hasMarkedText)
+        settle(0.04)
+        let status = try XCTUnwrap(find(StatusIndicatorButton.self, in: editor))
+        XCTAssertEqual(status.accessibilityLabel(), L10n.tr("Saving locally…"))
         text.insertText("你", replacementRange: text.markedRange())
         text.unmarkText()
         settle()

@@ -97,6 +97,7 @@ final class IslandNoteController: NSObject {
     private let canEnableSync: Bool
     private var settingsWindow: SettingsWindowController?
     private var showingSyncSettings = false
+    private var syncSettingsInFlight = false
 
     // 窗口与岛体
     private var panel: IslandPanel!
@@ -414,11 +415,8 @@ final class IslandNoteController: NSObject {
     }
 
     private func bindStore() {
-        store.onSaved = { [weak self] in
-            self?.editor.flashSavedIndicator()
-        }
-        store.onSaveError = { [weak self] message in
-            self?.editor.showSaveError(message)
+        store.onSaveState = { [weak self] state in
+            self?.editor.showLocalSaveState(state)
         }
         do {
             editor.string = try store.load()
@@ -792,7 +790,7 @@ final class IslandNoteController: NSObject {
     // MARK: - 悬停 / 点击
 
     private func handleHover(_ event: NSEvent? = nil) {
-        guard !showingSyncSettings, !PrivacyPolicyWindow.isVisible, !dragInteraction.preventsCollapse else { return }
+        guard !showingSyncSettings, !syncSettingsInFlight, !PrivacyPolicyWindow.isVisible, !dragInteraction.preventsCollapse else { return }
         // Shrinking can move the edge past a stationary pointer. Wait for the
         // gesture/animation to finish before accepting a new hover-exit movement.
         guard !isPinching, resizeTimer == nil else { return }
@@ -1042,7 +1040,7 @@ final class IslandNoteController: NSObject {
             editor.showSaveError(L10n.format("Could not read %@: %@", store.path, error.localizedDescription))
         }
         goTo(.expanded)
-        if preferences.flomoEnabled { sync?.request() }
+        if preferences.flomoEnabled { sync?.request(source: .panel) }
             Haptics.expand()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKey()
@@ -1121,17 +1119,19 @@ final class IslandNoteController: NSObject {
     }
 
     @objc func showSyncSettings() {
+        guard !syncSettingsInFlight else { return }
         guard preferences.flomoEnabled else { showSettings(); return }
         collapse()
         guard let sync else { FlomoSettings.error(L10n.tr("Sync settings could not be loaded. Your local note is still available.")); return }
         pendingCollapse?.cancel()
         pendingCollapse = nil
-        let wasShowing = showingSyncSettings
-        showingSyncSettings = true
-        defer { showingSyncSettings = wasShowing }
         editor.flushPending()
         guard store.flushSync() else { return }
-        FlomoSettings.show(sync)
+        syncSettingsInFlight = true
+        Task { [weak self] in
+            defer { self?.syncSettingsInFlight = false }
+            await FlomoSettings.show(sync)
+        }
     }
 
 

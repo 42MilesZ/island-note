@@ -179,6 +179,22 @@ final class FlomoClientTests: XCTestCase {
         XCTAssertEqual(callCount, 1)
     }
 
+    func testOfflineAndTimeoutHaveDifferentReadStates() async throws {
+        for (code, expected) in [(URLError.Code.notConnectedToInternet, FlomoClientError.offline), (.timedOut, .unavailable)] {
+            StubProtocol.handler = { _ in throw URLError(code) }
+            do { _ = try await client().fetch(id: "test"); XCTFail("Expected transport failure") }
+            catch let error as FlomoClientError { XCTAssertEqual(error, expected) }
+        }
+    }
+
+    func testOfflineHandshakeProvesNoCreateWasIssued() async throws {
+        var requests = 0
+        StubProtocol.handler = { _ in requests += 1; throw URLError(.notConnectedToInternet) }
+        do { _ = try await client().create(content: "Fixture"); XCTFail("Expected offline") }
+        catch let error as FlomoClientError { XCTAssertEqual(error, .writeNotIssued(.offline)) }
+        XCTAssertEqual(requests, 1)
+    }
+
     private func client() -> FlomoClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubProtocol.self]

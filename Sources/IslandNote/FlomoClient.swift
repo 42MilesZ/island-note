@@ -34,19 +34,23 @@ enum FlomoClientError: LocalizedError, Equatable {
     case rateLimited
     case conflict
     case unavailable
+    case offline
     case incompleteMemo
     case attachmentsUnsupported
     case unknownWriteOutcome
     case cancelledBeforeWrite
+    indirect case writeNotIssued(FlomoClientError)
 
     var errorDescription: String? { L10n.tr(messageKey) }
 
     var messageKey: String {
         switch self {
+        case .writeNotIssued(let reason): return reason.messageKey
         case .cancelledBeforeWrite: return "Flomo was stopped before sending the note. No write was issued."
         case .authentication: return "Flomo authorization failed. Check the token in Island Note settings."
         case .rateLimited: return "Flomo is limiting requests. Try again later."
         case .conflict: return "The Flomo memo changed elsewhere. Review it before syncing again."
+        case .offline: return "Your Mac is offline. Sync will retry automatically."
         case .unavailable: return "Flomo is unavailable. Try again later."
         case .incompleteMemo: return "Flomo returned an incomplete memo. Sync has stopped to protect its content."
         case .attachmentsUnsupported: return "This Flomo memo has attachments that Island Note cannot preserve. Sync has stopped."
@@ -142,7 +146,13 @@ final class FlomoClient: FlomoServing, FlomoSearching {
 
     private func call(_ name: String, arguments: [String: Any], isWrite: Bool) async throws -> [String: Any] {
         let generation = try requirePermission()
-        let context = try await initialize(generation: generation)
+        let context: Context
+        do { context = try await initialize(generation: generation) }
+        catch let error as FlomoClientError {
+            if error == .cancelledBeforeWrite { throw error }
+            throw isWrite ? FlomoClientError.writeNotIssued(error) : error
+        }
+        catch { throw isWrite ? FlomoClientError.writeNotIssued(.unavailable) : FlomoClientError.unavailable }
         let id = UUID().uuidString
         let envelope: [String: Any] = [
             "jsonrpc": "2.0", "id": id, "method": "tools/call",
@@ -153,6 +163,7 @@ final class FlomoClient: FlomoServing, FlomoSearching {
             response = try await post(envelope, id: id, context: context, generation: generation)
         } catch let error as FlomoClientError {
             switch error {
+            case .offline where isWrite: throw FlomoClientError.unknownWriteOutcome
             case .unavailable where isWrite: throw FlomoClientError.unknownWriteOutcome
             case .incompleteMemo where isWrite: throw FlomoClientError.unknownWriteOutcome
             default: throw error
@@ -239,6 +250,8 @@ final class FlomoClient: FlomoServing, FlomoSearching {
             }
         } catch let error as FlomoClientError {
             throw error
+        } catch let error as URLError where error.code == .notConnectedToInternet {
+            throw FlomoClientError.offline
         } catch {
             throw FlomoClientError.unavailable
         }
