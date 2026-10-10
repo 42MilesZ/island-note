@@ -287,3 +287,5 @@
 "The verified Flomo content differs from the uploaded note. Review both copies before continuing." = "Flomo 实际保存的内容与上传内容不一致，请查看两份内容后再继续。";
 
 "Review the latest local and Flomo copies before continuing." = "请查看本地和 Flomo 的最新内容后再继续。";
+
+"Saving Flomo changes to the local document…" = "正在将 Flomo 的修改保存到本地文档…";

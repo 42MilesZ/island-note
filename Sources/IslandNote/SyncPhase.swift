@@ -56,7 +56,7 @@ enum SyncPhase: String, Codable, Equatable {
     var isBusy: Bool { self == .checking || self == .syncing }
     var inlineStatus: String? {
         switch self {
-        case .checking, .syncing: return L10n.tr("Syncing…")
+        case .syncing: return L10n.tr("Syncing…")
         case .conflict, .mergeRequired: return L10n.tr("Conflict")
         case .formattingChanged: return L10n.tr("Content differs")
         case .verifyWrite: return L10n.tr("Sync unconfirmed")
@@ -90,7 +90,7 @@ struct StatusPresentation: Equatable {
     let caption: String?
     let summary: String
 
-    init(local: LocalSaveState, phase: SyncPhase, flomoEnabled: Bool, hovered: Bool, checkingExpanded: Bool) {
+    init(local: LocalSaveState, phase: SyncPhase, flomoEnabled: Bool, hovered: Bool) {
         if case .failed = local {
             tone = .error
             summary = L10n.tr("Not saved · Click for details")
@@ -107,7 +107,7 @@ struct StatusPresentation: Equatable {
             summary = flomoEnabled && effectivePhase.needsAction ? effectivePhase.hoverSummary
                 : L10n.tr("Saving locally…")
         } else { summary = flomoEnabled ? effectivePhase.hoverSummary : L10n.tr("Saved locally") }
-        let automatic = flomoEnabled && (effectivePhase != .checking || checkingExpanded) ? effectivePhase.inlineStatus : nil
+        let automatic = flomoEnabled ? effectivePhase.inlineStatus : nil
         caption = hovered ? summary : automatic
     }
 }

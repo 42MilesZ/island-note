@@ -1035,13 +1035,14 @@ final class IslandNoteController: NSObject {
             if let updatedText = try store.refreshIfClean() {
                 editor.string = updatedText
                 editor.setEditingEnabled(true)
+                // A real external edit follows the same quiet period as typing.
+                if preferences.flomoEnabled { sync?.localChanged() }
             }
         } catch {
             editor.showSaveError(L10n.format("Could not read %@: %@", store.path, error.localizedDescription))
         }
         goTo(.expanded)
-        if preferences.flomoEnabled { sync?.request(source: .panel) }
-            Haptics.expand()
+        Haptics.expand()
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKey()
         DispatchQueue.main.async { [weak self] in

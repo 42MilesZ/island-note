@@ -3,7 +3,7 @@ import XCTest
 
 final class StatusPresentationTests: XCTestCase {
     private func status(_ local: LocalSaveState, _ phase: SyncPhase, enabled: Bool = true, hovered: Bool = false) -> StatusPresentation {
-        StatusPresentation(local: local, phase: phase, flomoEnabled: enabled, hovered: hovered, checkingExpanded: true)
+        StatusPresentation(local: local, phase: phase, flomoEnabled: enabled, hovered: hovered)
     }
 
     func testSuccessRequiresCurrentLocalVersionToBeSaved() {
@@ -30,11 +30,11 @@ final class StatusPresentationTests: XCTestCase {
         }
     }
 
-    func testShortChecksWaitButUploadsExpandImmediately() {
+    func testReadOnlyChecksStayCompactButTransfersExpandImmediately() {
         XCTAssertNil(StatusPresentation(local: .saved, phase: .checking, flomoEnabled: true,
-                                        hovered: false, checkingExpanded: false).caption)
+                                        hovered: false).caption)
         XCTAssertNotNil(StatusPresentation(local: .saved, phase: .syncing, flomoEnabled: true,
-                                           hovered: false, checkingExpanded: false).caption)
+                                           hovered: false).caption)
         XCTAssertEqual(status(.saving, .syncing, hovered: true).summary, L10n.tr("Saving locally…"))
     }
 }

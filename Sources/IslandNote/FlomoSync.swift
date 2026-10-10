@@ -21,7 +21,7 @@ struct SyncRecord: Codable, Equatable {
     var reviewPhase: SyncPhase?
 }
 
-enum SyncTrigger: String { case startup, timer, edit, panel, manual, recovery }
+enum SyncTrigger: String { case startup, timer, edit, manual, recovery }
 
 enum SyncChoice { case local, remote, merge }
 
@@ -327,6 +327,7 @@ final class FlomoSync {
                 conflict = nil
                 report("Both copies are up to date.", phase: .synced)
             case .pull:
+                report("Saving Flomo changes to the local document…", phase: .syncing)
                 guard let applyRemote else { throw SyncFailure.localUnavailable }
                 try applyRemote(rawLocal, remoteText)
                 record.lastVerifiedAt = Date()

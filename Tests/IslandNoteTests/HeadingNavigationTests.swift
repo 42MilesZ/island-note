@@ -39,8 +39,12 @@ final class HeadingNavigationTests: XCTestCase {
         let button = try XCTUnwrap(find(StatusIndicatorButton.self, in: editor))
         editor.showSyncStatus(.synced, detail: "Both copies match")
         let rightEdge = button.frame.maxX
+        let dot = try XCTUnwrap(button.layer?.sublayers?.first { $0.bounds.size == CGSize(width: 6, height: 6) })
+        XCTAssertEqual(dot.shadowOpacity, 0.8)
+        XCTAssertEqual(dot.shadowRadius, 4)
+        XCTAssertEqual(dot.shadowOffset, .zero)
         XCTAssertEqual(button.frame.width, 24)
-        for phase in [SyncPhase.checking, .syncing] {
+        for phase in [SyncPhase.syncing] {
             editor.showSyncStatus(phase, detail: "Request in progress")
             settle(0.3)
             XCTAssertGreaterThan(button.frame.width, 24)
@@ -49,6 +53,10 @@ final class HeadingNavigationTests: XCTestCase {
             XCTAssertTrue(try XCTUnwrap(find(NSTextView.self, in: editor)).isEditable)
             try snapshot(editor, name: phase == .checking ? "status-auto-checking" : "status-auto-syncing")
         }
+        editor.showSyncStatus(.checking, detail: "Background comparison")
+        settle(0.3)
+        XCTAssertEqual(button.frame.width, 24, "Read-only polling does not expand a syncing caption")
+        editor.showSyncStatus(.syncing, detail: "Actual transfer")
         var requests = 0
         editor.onRequestSync = { requests += 1 }
         button.onHover?(true)

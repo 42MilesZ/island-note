@@ -94,14 +94,13 @@ final class NoteEditorView: NSView {
     private weak var featherView: EdgeFeatherView?
     private weak var observedClipView: NSClipView?
     private var scrollObservation: NSObjectProtocol?
+    private static let successColor = NSColor(srgbRed: 0.35, green: 0.96, blue: 0.58, alpha: 1)
     private let statusDot = CALayer()
     private var isFlomoEnabled = false
     private var syncDetail = "Flomo is not connected. Click to set up sync."
     private var displayedSyncPhase = SyncPhase.disconnected
     private var localSaveError: String?
     private var localSaveState = LocalSaveState.loading
-    private var checkingExpansionWork: DispatchWorkItem?
-    private var checkingExpanded = false
     private var motionObservation: NSObjectProtocol?
     private var compositionObservations: [NSObjectProtocol] = []
     private var isComposing = false
@@ -201,6 +200,10 @@ final class NoteEditorView: NSView {
         addSubview(syncButton)
         statusDot.frame = CGRect(x: 9, y: 9, width: 6, height: 6)
         statusDot.cornerRadius = 3
+        statusDot.shadowOffset = .zero
+        statusDot.shadowRadius = 4
+        statusDot.shadowOpacity = 0.8
+        statusDot.shadowPath = CGPath(ellipseIn: statusDot.bounds, transform: nil)
         syncButton.layer?.addSublayer(statusDot)
         syncButton.layer?.cornerRadius = 12
         syncButton.layer?.masksToBounds = true
@@ -284,21 +287,8 @@ final class NoteEditorView: NSView {
     }
 
     func showSyncStatus(_ phase: SyncPhase, detail: String) {
-        let wasBusy = displayedSyncPhase.isBusy && checkingExpanded
-        checkingExpansionWork?.cancel()
-        checkingExpansionWork = nil
         displayedSyncPhase = phase
         syncDetail = detail
-        checkingExpanded = phase == .syncing || (phase == .checking && wasBusy)
-        if phase == .checking && !checkingExpanded {
-            let work = DispatchWorkItem { [weak self] in
-                guard let self, self.displayedSyncPhase == .checking else { return }
-                self.checkingExpanded = true
-                self.refreshStatusIndicator()
-            }
-            checkingExpansionWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
-        }
         refreshStatusIndicator()
     }
 
@@ -321,7 +311,7 @@ final class NoteEditorView: NSView {
         let phase = displayedSyncPhase
         let currentLocalState: LocalSaveState = isComposing && localSaveError == nil ? .saving : localSaveState
         let presentation = StatusPresentation(local: currentLocalState, phase: phase, flomoEnabled: isFlomoEnabled,
-                                              hovered: showsHoverStatus, checkingExpanded: checkingExpanded)
+                                              hovered: showsHoverStatus)
         let localDetail: String
         switch currentLocalState {
         case .loading: localDetail = L10n.tr("Loading note…")
@@ -339,7 +329,7 @@ final class NoteEditorView: NSView {
         switch presentation.tone {
         case .error: color = .systemRed
         case .warning: color = NSColor(red: 0.94, green: 0.70, blue: 0.38, alpha: 1)
-        case .success: color = NSColor(red: 0.55, green: 0.80, blue: 0.67, alpha: 1)
+        case .success: color = Self.successColor
         case .busy: color = NSColor(white: 0.68, alpha: 1)
         case .neutral: color = NSColor(white: 0.40, alpha: 1)
         }
@@ -348,6 +338,7 @@ final class NoteEditorView: NSView {
         CATransaction.setDisableActions(true)
         statusDot.backgroundColor = color.cgColor
         CATransaction.commit()
+        SettingsPalette.animate(statusDot, key: "shadowColor", value: color.cgColor, duration: 0.18)
         let reduceMotion = motionIsReduced()
         if (!isBusy || localSaveError != nil || reduceMotion), statusDot.animation(forKey: "sync-busy") != nil {
             let opacity = statusDot.presentation()?.opacity ?? statusDot.opacity
@@ -458,7 +449,7 @@ final class NoteEditorView: NSView {
         switch tone {
         case .error: tint = .systemRed
         case .warning: tint = amber
-        case .success: tint = NSColor(red: 0.55, green: 0.80, blue: 0.67, alpha: 1)
+        case .success: tint = Self.successColor
         default: tint = NSColor(white: 0.86, alpha: 1)
         }
         SettingsPalette.animate(syncLabel, key: "foregroundColor", value: tint.cgColor, duration: 0.24)
@@ -641,7 +632,6 @@ final class NoteEditorView: NSView {
 
     deinit {
         statusHoverWork?.cancel()
-        checkingExpansionWork?.cancel()
         if let motionObservation { NSWorkspace.shared.notificationCenter.removeObserver(motionObservation) }
         for observation in compositionObservations { NotificationCenter.default.removeObserver(observation) }
         outlineRefresh?.cancel()
