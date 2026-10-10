@@ -338,7 +338,7 @@ final class NoteEditorView: NSView {
         CATransaction.setDisableActions(true)
         statusDot.backgroundColor = color.cgColor
         CATransaction.commit()
-        SettingsPalette.animate(statusDot, key: "shadowColor", value: color.cgColor, duration: 0.18)
+        SettingsPalette.animate(statusDot, key: "shadowColor", value: color.cgColor, duration: 0.24)
         let reduceMotion = motionIsReduced()
         if (!isBusy || localSaveError != nil || reduceMotion), statusDot.animation(forKey: "sync-busy") != nil {
             let opacity = statusDot.presentation()?.opacity ?? statusDot.opacity
@@ -354,7 +354,7 @@ final class NoteEditorView: NSView {
             let fade = CABasicAnimation(keyPath: "backgroundColor")
             fade.fromValue = previousColor
             fade.toValue = color.cgColor
-            fade.duration = 0.18
+            fade.duration = 0.24
             fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             statusDot.add(fade, forKey: "status-color")
             if isBusy, localSaveError == nil, statusDot.animation(forKey: "sync-busy") == nil {
@@ -453,7 +453,7 @@ final class NoteEditorView: NSView {
         default: tint = NSColor(white: 0.86, alpha: 1)
         }
         SettingsPalette.animate(syncLabel, key: "foregroundColor", value: tint.cgColor, duration: 0.24)
-        let background = expanded && (tone == .warning || tone == .error) ? tint.withAlphaComponent(0.12) : NSColor(white: 1, alpha: expanded ? 0.07 : 0)
+        let background = tint.withAlphaComponent(expanded ? 0.06 : 0)
         SettingsPalette.animate(buttonLayer, key: "backgroundColor", value: background.cgColor, duration: 0.24)
     }
 
