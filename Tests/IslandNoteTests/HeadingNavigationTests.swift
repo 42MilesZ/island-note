@@ -36,7 +36,6 @@ final class HeadingNavigationTests: XCTestCase {
         editor.setFlomoEnabled(true)
         editor.layoutSubtreeIfNeeded()
         let button = try XCTUnwrap(find(StatusIndicatorButton.self, in: editor))
-        let hint = try XCTUnwrap(find(StatusHoverView.self, in: editor))
         editor.showSyncStatus(.synced, detail: "Both copies match")
         let rightEdge = button.frame.maxX
         XCTAssertEqual(button.frame.width, 24)
@@ -45,7 +44,6 @@ final class HeadingNavigationTests: XCTestCase {
             settle(0.3)
             XCTAssertGreaterThan(button.frame.width, 24)
             XCTAssertEqual(button.frame.maxX, rightEdge)
-            XCTAssertTrue(hint.isHidden, "The inline status needs no hover or overlay")
             XCTAssertLessThanOrEqual(editor.dragHandle.frame.maxX, button.frame.minX - 8)
             XCTAssertTrue(try XCTUnwrap(find(NSTextView.self, in: editor)).isEditable)
             try snapshot(editor, name: phase == .checking ? "status-auto-checking" : "status-auto-syncing")
@@ -54,7 +52,8 @@ final class HeadingNavigationTests: XCTestCase {
         editor.onRequestSync = { requests += 1 }
         button.onHover?(true)
         settle(0.3)
-        XCTAssertFalse(hint.isHidden)
+        XCTAssertGreaterThan(button.frame.width, 24)
+        XCTAssertEqual(button.frame.maxX, rightEdge)
         XCTAssertEqual(requests, 0)
         button.onHover?(false)
         editor.showSyncStatus(.waiting, detail: "New input is waiting")
@@ -63,14 +62,12 @@ final class HeadingNavigationTests: XCTestCase {
         settle(0.3)
         XCTAssertEqual(button.frame.width, 24)
         XCTAssertEqual(button.frame.maxX, rightEdge)
-        XCTAssertTrue(hint.isHidden)
         for phase in [SyncPhase.conflict, .mergeRequired] {
             editor.showSyncStatus(phase, detail: "Review both copies")
             settle(0.3)
             XCTAssertGreaterThan(button.frame.width, 24)
             XCTAssertEqual(button.frame.maxX, rightEdge)
-            XCTAssertTrue(hint.isHidden)
-        }
+            }
         editor.showSyncStatus(.syncing, detail: "Request in progress")
         editor.showSaveError("The local file is unavailable")
         XCTAssertEqual(button.frame.width, 24)
