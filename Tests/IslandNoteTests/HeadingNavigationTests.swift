@@ -24,6 +24,56 @@ final class HeadingNavigationTests: XCTestCase {
         try png.write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
     }
 
+    func testSyncStatusExpandsAutomaticallyAndKeepsHoverInformational() throws {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 280), styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let editor = NoteEditorView(frame: window.contentView!.bounds)
+        window.contentView = editor
+        editor.string = "# A note\n\nText remains editable during sync."
+        editor.setEditingEnabled(true)
+        editor.setFlomoEnabled(true)
+        editor.layoutSubtreeIfNeeded()
+        let button = try XCTUnwrap(find(StatusIndicatorButton.self, in: editor))
+        let hint = try XCTUnwrap(find(StatusHoverView.self, in: editor))
+        editor.showSyncStatus(.synced, detail: "Both copies match")
+        let rightEdge = button.frame.maxX
+        XCTAssertEqual(button.frame.width, 24)
+        for phase in [SyncPhase.checking, .syncing] {
+            editor.showSyncStatus(phase, detail: "Request in progress")
+            settle(0.3)
+            XCTAssertGreaterThan(button.frame.width, 24)
+            XCTAssertEqual(button.frame.maxX, rightEdge)
+            XCTAssertTrue(hint.isHidden, "The inline status needs no hover or overlay")
+            XCTAssertLessThanOrEqual(editor.dragHandle.frame.maxX, button.frame.minX - 8)
+            XCTAssertTrue(try XCTUnwrap(find(NSTextView.self, in: editor)).isEditable)
+            try snapshot(editor, name: phase == .checking ? "status-auto-checking" : "status-auto-syncing")
+        }
+        var requests = 0
+        editor.onRequestSync = { requests += 1 }
+        button.onHover?(true)
+        settle(0.3)
+        XCTAssertFalse(hint.isHidden)
+        XCTAssertEqual(requests, 0)
+        button.onHover?(false)
+        editor.showSyncStatus(.waiting, detail: "New input is waiting")
+        editor.showSyncStatus(.syncing, detail: "Another request")
+        editor.showSyncStatus(.synced, detail: "Verified")
+        settle(0.3)
+        XCTAssertEqual(button.frame.width, 24)
+        XCTAssertEqual(button.frame.maxX, rightEdge)
+        XCTAssertTrue(hint.isHidden)
+        editor.showSyncStatus(.syncing, detail: "Request in progress")
+        editor.showSaveError("The local file is unavailable")
+        XCTAssertEqual(button.frame.width, 24)
+        XCTAssertEqual(button.accessibilityLabel(), L10n.tr("Local save failed"))
+        editor.flashSavedIndicator()
+        XCTAssertGreaterThan(button.frame.width, 24, "A local save pulse must not hide ongoing sync")
+        editor.setFlomoEnabled(false)
+        XCTAssertEqual(button.frame.width, 24)
+    }
+
     func testNativeEditorRejectsOversizedPasteWithoutTruncating() throws {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 275), styleMask: .borderless, backing: .buffered, defer: false)

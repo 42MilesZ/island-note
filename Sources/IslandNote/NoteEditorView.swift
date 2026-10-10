@@ -105,6 +105,8 @@ final class NoteEditorView: NSView {
     private var statusHintWork: DispatchWorkItem?
     private var isStatusHovered = false
     private let syncButton = StatusIndicatorButton(title: "", target: nil, action: nil)
+    private let syncLabel = CATextLayer()
+    private var syncButtonWidth: NSLayoutConstraint!
     let outlineModel = HeadingOutlineModel()
     private var outlineRefresh: DispatchWorkItem?
     private var geometryRefresh: DispatchWorkItem?
@@ -120,6 +122,7 @@ final class NoteEditorView: NSView {
     var onRequestQuit: (() -> Void)?
     var onRequestSync: (() -> Void)?
     var onRequestSettings: (() -> Void)?
+    var onStatusWidthChanged: ((CGFloat) -> Void)?
 
     var string: String {
         get { model.text }
@@ -193,7 +196,14 @@ final class NoteEditorView: NSView {
         statusDot.frame = CGRect(x: 9, y: 9, width: 6, height: 6)
         statusDot.cornerRadius = 3
         syncButton.layer?.addSublayer(statusDot)
-        refreshStatusIndicator()
+        syncButton.layer?.cornerRadius = 12
+        syncButton.layer?.masksToBounds = true
+        syncLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        syncLabel.fontSize = 12
+        syncLabel.foregroundColor = NSColor(white: 0.86, alpha: 1).cgColor
+        syncLabel.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        syncLabel.opacity = 0
+        syncButton.layer?.addSublayer(syncLabel)
 
         let featherView = EdgeFeatherView(frame: .zero)
         self.featherView = featherView
@@ -215,6 +225,7 @@ final class NoteEditorView: NSView {
         addSubview(statusHint, positioned: .above, relativeTo: nil)
         statusHint.layer?.zPosition = 100
 
+        syncButtonWidth = syncButton.widthAnchor.constraint(equalToConstant: 24)
         NSLayoutConstraint.activate([
             statusHint.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -24),
             statusHint.topAnchor.constraint(equalTo: syncButton.bottomAnchor, constant: 3),
@@ -235,13 +246,14 @@ final class NoteEditorView: NSView {
 
             syncButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -15),
             syncButton.topAnchor.constraint(equalTo: topAnchor, constant: 7),
-            syncButton.widthAnchor.constraint(equalToConstant: 24),
+            syncButtonWidth,
             syncButton.heightAnchor.constraint(equalToConstant: 24),
             dragHandle.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 28),
             dragHandle.trailingAnchor.constraint(equalTo: syncButton.leadingAnchor, constant: -8),
             dragHandle.centerYAnchor.constraint(equalTo: syncButton.centerYAnchor),
             dragHandle.heightAnchor.constraint(equalTo: syncButton.heightAnchor),
         ])
+        refreshStatusIndicator()
     }
 
     override func layout() {
@@ -284,6 +296,7 @@ final class NoteEditorView: NSView {
             : (isFlomoEnabled ? phase.title : L10n.tr("Local save status")))
         let needsAction = isFlomoEnabled && phase.needsAction
         let isBusy = isFlomoEnabled && phase.isBusy
+        updateSyncExpansion(isBusy && localSaveError == nil)
         syncButton.setAccessibilityHelp(details)
 
         // A local write failure must remain visible even if Flomo reports success.
@@ -291,7 +304,7 @@ final class NoteEditorView: NSView {
         let color: NSColor
         if localSaveError != nil { color = .systemRed }
         else if needsAction { color = NSColor(red: 0.94, green: 0.70, blue: 0.38, alpha: 1) }
-        else if showingSavePulse { color = NSColor(red: 0.55, green: 0.80, blue: 0.67, alpha: 1) }
+        else if showingSavePulse && !isBusy { color = NSColor(red: 0.55, green: 0.80, blue: 0.67, alpha: 1) }
         else { color = NSColor(white: isBusy ? 0.68 : 0.40, alpha: 1) }
         let previousColor = statusDot.presentation()?.backgroundColor ?? statusDot.backgroundColor
         CATransaction.begin()
@@ -304,17 +317,55 @@ final class NoteEditorView: NSView {
             fade.fromValue = previousColor
             fade.toValue = color.cgColor
             fade.duration = 0.18
+            fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
             statusDot.add(fade, forKey: "status-color")
-            if isBusy, !showingSavePulse, localSaveError == nil {
+            if isBusy, localSaveError == nil {
                 let pulse = CABasicAnimation(keyPath: "opacity")
                 pulse.fromValue = 0.4
                 pulse.toValue = 1
                 pulse.duration = 0.8
                 pulse.autoreverses = true
                 pulse.repeatCount = .infinity
+                pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 statusDot.add(pulse, forKey: "sync-busy")
             }
         }
+    }
+
+    /// Keep the right-hand dot anchored while the same control opens to the left.
+    private func updateSyncExpansion(_ expanded: Bool) {
+        guard let syncButtonWidth, let buttonLayer = syncButton.layer else { return }
+        let text = L10n.tr("Syncing…")
+        let textWidth = ceil((text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium)]).width)
+        let width: CGFloat = expanded ? textWidth + 34 : 24
+        let changesGeometry = syncButtonWidth.constant != width
+        let previousBounds = buttonLayer.presentation()?.bounds ?? buttonLayer.bounds
+        let previousPosition = buttonLayer.presentation()?.position ?? buttonLayer.position
+        let previousDotPosition = statusDot.presentation()?.position ?? statusDot.position
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        syncLabel.string = text
+        syncLabel.frame = CGRect(x: 10, y: 4, width: textWidth, height: 16)
+        syncButtonWidth.constant = width
+        layoutSubtreeIfNeeded()
+        statusDot.position = CGPoint(x: width - 12, y: 12)
+        CATransaction.commit()
+        if changesGeometry {
+            let duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.08 : 0.24
+            for (layer, key, from) in [(buttonLayer, "bounds", NSValue(rect: previousBounds)),
+                                       (buttonLayer, "position", NSValue(point: previousPosition)),
+                                       (statusDot, "position", NSValue(point: previousDotPosition))] {
+                let animation = CABasicAnimation(keyPath: key)
+                animation.fromValue = from
+                animation.toValue = layer.value(forKeyPath: key)
+                animation.duration = duration
+                animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                layer.add(animation, forKey: "sync-expansion-" + key)
+            }
+            onStatusWidthChanged?(width)
+        }
+        SettingsPalette.animate(syncLabel, key: "opacity", value: expanded ? Float(1) : Float(0), duration: 0.16)
+        SettingsPalette.animate(buttonLayer, key: "backgroundColor", value: NSColor(white: 1, alpha: expanded ? 0.07 : 0).cgColor, duration: 0.24)
     }
 
     private func setStatusHovered(_ hovered: Bool) {
@@ -327,6 +378,7 @@ final class NoteEditorView: NSView {
                 self.statusHint.isHidden = false
                 NSAnimationContext.runAnimationGroup { context in
                     context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.16
+                    context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                     self.statusHint.animator().alphaValue = 1
                 }
             }
@@ -335,6 +387,7 @@ final class NoteEditorView: NSView {
         } else {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0 : 0.12
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 statusHint.animator().alphaValue = 0
             } completionHandler: { [weak self] in
                 guard let self, !self.isStatusHovered else { return }

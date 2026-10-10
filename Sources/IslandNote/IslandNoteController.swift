@@ -349,6 +349,7 @@ final class IslandNoteController: NSObject {
 
         content.addSubview(island)
         resizeHandles = PanelResizeView(frame: content.bounds)
+        editor.onStatusWidthChanged = { [weak self] width in self?.resizeHandles.statusButtonWidth = width }
         resizeHandles.panelRect = expandedRect
         content.addSubview(resizeHandles, positioned: .above, relativeTo: island)
         panel.resizeCursorAtPoint = { [weak self] point in

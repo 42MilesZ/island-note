@@ -58,6 +58,7 @@ final class FlomoSync {
     /// Compare the editor/file against expected before applying; save a backup.
     var applyRemote: ((_ expected: String, _ replacement: String) throws -> Void)?
     private let stateURL: URL
+    private let pollingInterval: TimeInterval
     private var client: FlomoServing?
     private var timer: Timer?
     private var debounce: DispatchWorkItem?
@@ -68,8 +69,9 @@ final class FlomoSync {
     private var generation = UUID()
     private let logger = Logger(subsystem: "local.projects.island-note", category: "FlomoSync")
 
-    init(stateURL: URL) throws {
+    init(stateURL: URL, pollingInterval: TimeInterval = 60) throws {
         self.stateURL = stateURL
+        self.pollingInterval = pollingInterval
         if FileManager.default.fileExists(atPath: stateURL.path) {
             record = try JSONDecoder().decode(SyncRecord.self, from: Data(contentsOf: stateURL))
         } else { record = SyncRecord() }
@@ -80,9 +82,11 @@ final class FlomoSync {
         self.client = client
         client.setRequestsEnabled(record.enabled)
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+        let pollingTimer = Timer(timeInterval: pollingInterval, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.request() }
         }
+        timer = pollingTimer
+        RunLoop.main.add(pollingTimer, forMode: .common)
         if record.enabled { request() }
         else { report("Automatic sync is paused. Local changes still save to disk.", phase: .paused) }
     }
@@ -183,7 +187,11 @@ final class FlomoSync {
             await settleEditorUpdates()
             guard record.enabled, generation == epoch else { return }
             let currentLocal = try readLocal()
-            guard currentLocal == rawLocal else { localChanged(); return }
+            guard currentLocal == rawLocal else {
+                report("Local edits are waiting to sync after typing stops.", phase: .waiting)
+                localChanged()
+                return
+            }
             let remoteText = SyncDocument.fromFlomo(remote.content)
             guard SyncDocument.issue(in: remoteText) == nil else {
                 report("Flomo: " + (SyncDocument.issue(in: remoteText) ?? "Unsupported content"), phase: .unsupported); return

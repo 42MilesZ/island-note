@@ -57,6 +57,36 @@ final class FlomoSyncTests: XCTestCase {
         super.tearDown()
     }
 
+    func testBackgroundPollingPullsWithoutOpeningOrHoveringThePanel() async throws {
+        let (_, url) = try make()
+        let sync = try FlomoSync(stateURL: url, pollingInterval: 0.05)
+        defer { sync.stop() }
+        let client = FakeFlomo()
+        var local = "Base"
+        sync.readLocal = { local }
+        let pulled = expectation(description: "A later background poll pulls the remote edit")
+        sync.applyRemote = { expected, replacement in
+            XCTAssertEqual(expected, "Base")
+            local = replacement
+            pulled.fulfill()
+        }
+        // After the startup read, change only the remote copy. There is no UI
+        // and no manual request: the repeating timer must find the next version.
+        client.onFetch = {
+            if client.fetches == 1 {
+                DispatchQueue.main.async {
+                    client.memo = FlomoMemo(id: "test", content: "Remote background edit", updatedAt: "v2")
+                }
+            }
+        }
+        sync.start(client: client)
+        await fulfillment(of: [pulled], timeout: 2)
+        XCTAssertEqual(local, "Remote background edit")
+        XCTAssertGreaterThanOrEqual(client.fetches, 2)
+        XCTAssertEqual(client.updates, 0)
+        XCTAssertEqual(sync.phase, .synced)
+    }
+
     func testDisabledExtensionStopsQueuedRequestsAndRejectsDeferredConnect() async throws {
         let (sync, url) = try make()
         let client = FakeFlomo()
@@ -195,6 +225,7 @@ final class FlomoSyncTests: XCTestCase {
         await sync.synchronize()
         XCTAssertEqual(local, "Typing during request")
         XCTAssertEqual(sync.record.baseline, "Base")
+        XCTAssertEqual(sync.phase, .waiting)
         sync.pause()
     }
 

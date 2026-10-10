@@ -95,6 +95,8 @@
 "Saved · Synced" = "Saved · Synced";
 "Saved · Checking sync" = "Saved · Checking sync";
 "Saved · Syncing…" = "Saved · Syncing…";
+"Syncing…" = "Syncing…";
+"Local edits are waiting to sync after typing stops." = "Local edits are waiting to sync after typing stops.";
 "Saved · Sync pending" = "Saved · Sync pending";
 "Saved · Sync paused" = "Saved · Sync paused";
 "Local only · Connect Flomo" = "Local only · Connect Flomo";

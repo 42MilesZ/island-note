@@ -171,6 +171,7 @@ final class PanelResizeView: NSView {
         didSet { isHidden = !isEnabled }
     }
     var panelRect = NSRect.zero { didSet { layoutHandles() } }
+    var statusButtonWidth: CGFloat = 24 { didSet { layoutHandles() } }
     private var handles: [PanelResizeHandle] = []
 
     override init(frame: NSRect) {
@@ -200,7 +201,7 @@ final class PanelResizeView: NSView {
         let r = panelRect
         let inside = Self.insideReach, outside = Self.outsideReach
         // Subtract the editor's full status-button footprint from both hover and clicks.
-        let statusRect = NSRect(x: r.maxX - 39, y: r.maxY - 31, width: 24, height: 24)
+        let statusRect = NSRect(x: r.maxX - 15 - statusButtonWidth, y: r.maxY - 31, width: statusButtonWidth, height: 24)
         for handle in handles {
             switch handle.edges {
             case .left: handle.frame = NSRect(x: r.minX - 7, y: r.minY + inside, width: 14, height: max(0, r.height - inside * 2))
