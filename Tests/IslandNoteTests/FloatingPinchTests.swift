@@ -11,6 +11,20 @@ final class FloatingPinchTests: XCTestCase {
 
     private func settle() { RunLoop.main.run(until: Date().addingTimeInterval(1.1)) }
 
+    func testPinchingPartlyOffscreenKeepsCenterUntilFortyPointLimit() {
+        let screen = NSRect(x: -1280, y: -800, width: 1280, height: 776)
+        let rect = NSRect(x: screen.minX - 340, y: screen.minY - 400, width: 420, height: 460)
+        let unchanged = FloatingPanelLayout.magnified(rect, delta: 0, maximum: screen.size, screen: screen)
+        XCTAssertEqual(unchanged.rect, rect)
+        let enlarged = FloatingPanelLayout.magnified(rect, delta: 0.1, maximum: screen.size, screen: screen)
+        XCTAssertEqual(enlarged.rect.midX, rect.midX)
+        XCTAssertEqual(enlarged.rect.midY, rect.midY)
+        let smaller = FloatingPanelLayout.magnified(rect, delta: -0.2, maximum: screen.size, screen: screen)
+        let overlap = smaller.rect.intersection(screen)
+        XCTAssertEqual(overlap.width, 40)
+        XCTAssertEqual(overlap.height, 40)
+    }
+
     func testFloatingPinchImmediatelyAfterReleasePreservesEditingAndDocking() throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("island-floating-pinch-" + UUID().uuidString)
@@ -58,8 +72,9 @@ final class FloatingPinchTests: XCTestCase {
         XCTAssertEqual(panel.level, .floating)
         XCTAssertEqual(controller.mode, .expanded)
         let visible = editor.frame.offsetBy(dx: panel.frame.minX, dy: panel.frame.minY)
-        XCTAssertGreaterThanOrEqual(visible.minY, screen.minY - 1)
-        XCTAssertLessThanOrEqual(visible.maxY, screen.maxY + 1)
+        let overlap = visible.intersection(screen)
+        XCTAssertGreaterThanOrEqual(overlap.width, 40)
+        XCTAssertGreaterThanOrEqual(overlap.height, 40)
         XCTAssertEqual(text.string, source)
         XCTAssertEqual(text.selectedRange(), selection)
         let resizedFont = try XCTUnwrap(text.textStorage?.attribute(.font, at: 10, effectiveRange: nil) as? NSFont)

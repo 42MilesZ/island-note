@@ -100,12 +100,14 @@ enum PanelDocking {
         return t * t * (3 - 2 * t)
     }
 
-    /// Keep the complete header reachable even when the panel exceeds a small display.
+    /// Allow floating notes offscreen while retaining a 40-point overlap on each axis.
     static func constrainedOrigin(_ origin: NSPoint, rect: NSRect, screen: NSRect) -> NSPoint {
-        let xMin = screen.minX - rect.minX
-        let xMax = max(xMin, screen.maxX - rect.maxX)
-        let yMax = screen.maxY - rect.maxY
-        let yMin = min(yMax, screen.minY - rect.minY)
+        let visibleWidth = min(40, rect.width, screen.width)
+        let visibleHeight = min(40, rect.height, screen.height)
+        let xMin = screen.minX + visibleWidth - rect.maxX
+        let xMax = screen.maxX - visibleWidth - rect.minX
+        let yMin = screen.minY + visibleHeight - rect.maxY
+        let yMax = screen.maxY - visibleHeight - rect.minY
         return NSPoint(x: min(max(origin.x, xMin), xMax), y: min(max(origin.y, yMin), yMax))
     }
 }

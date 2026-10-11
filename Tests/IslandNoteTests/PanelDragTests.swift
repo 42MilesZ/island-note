@@ -96,17 +96,29 @@ final class PanelDragTests: XCTestCase {
         }
     }
 
-    func testPanelRemainsReachableOnNegativeAndSmallDisplays() {
+    func testFloatingPanelRetainsFortyPointOverlapAtEveryEdgeAndCorner() {
         let rect = NSRect(x: 64, y: 64, width: 690, height: 550)
-        let screen = NSRect(x: -1280, y: -800, width: 1280, height: 776)
-        let origin = PanelDocking.constrainedOrigin(NSPoint(x: 500, y: 800), rect: rect, screen: screen)
-        let visible = rect.offsetBy(dx: origin.x, dy: origin.y)
-        XCTAssertLessThanOrEqual(visible.maxX, screen.maxX)
-        XCTAssertLessThanOrEqual(visible.maxY, screen.maxY)
-        let small = NSRect(x: 0, y: 0, width: 500, height: 400)
-        let smallOrigin = PanelDocking.constrainedOrigin(.zero, rect: rect, screen: small)
-        XCTAssertEqual(rect.maxY + smallOrigin.y, small.maxY)
-        XCTAssertEqual(rect.minX + smallOrigin.x, small.minX)
+        for screen in [NSRect(x: -1280, y: -800, width: 1280, height: 776),
+                       NSRect(x: 900, y: 200, width: 500, height: 400)] {
+            for x in [screen.minX - 2000, screen.midX - rect.midX, screen.maxX + 2000] {
+                for y in [screen.minY - 2000, screen.midY - rect.midY, screen.maxY + 2000] {
+                    let requested = NSPoint(x: x, y: y)
+                    let origin = PanelDocking.constrainedOrigin(requested, rect: rect, screen: screen)
+                    let overlap = rect.offsetBy(dx: origin.x, dy: origin.y).intersection(screen)
+                    XCTAssertGreaterThanOrEqual(overlap.width, 40)
+                    XCTAssertGreaterThanOrEqual(overlap.height, 40)
+                    if x != screen.midX - rect.midX { XCTAssertEqual(overlap.width, 40) }
+                    if y != screen.midY - rect.midY { XCTAssertEqual(overlap.height, 40) }
+                    XCTAssertEqual(PanelDocking.constrainedOrigin(origin, rect: rect, screen: screen), origin)
+                }
+            }
+            // A partly hidden panel inside the overlap limit must not jump on release.
+            let partial = NSPoint(x: screen.minX - rect.maxX + 80, y: screen.minY - rect.maxY + 60)
+            XCTAssertEqual(PanelDocking.constrainedOrigin(partial, rect: rect, screen: screen), partial)
+        }
+        let tiny = NSRect(x: 10, y: 20, width: 30, height: 25)
+        let origin = PanelDocking.constrainedOrigin(.zero, rect: rect, screen: tiny)
+        XCTAssertEqual(rect.offsetBy(dx: origin.x, dy: origin.y).intersection(tiny), tiny)
     }
 
     func testContourMorphKeepsTopologyAndTextFootprint() {

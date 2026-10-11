@@ -31,7 +31,13 @@ enum FloatingPanelLayout {
         let size = NSSize(width: min(available.width, rect.width * scale), height: min(available.height, rect.height * scale))
         var result = NSRect(x: rect.midX - size.width / 2, y: anchoredToTop ? rect.maxY - size.height : rect.midY - size.height / 2,
                             width: size.width, height: size.height)
-        result.origin = PanelDocking.constrainedOrigin(result.origin, rect: NSRect(origin: .zero, size: size), screen: screen)
+        if anchoredToTop {
+            // Docked notes keep their complete viewport within the island's bounds.
+            result.origin.x = min(max(result.minX, screen.minX), screen.maxX - size.width)
+            result.origin.y = min(max(result.minY, screen.minY), screen.maxY - size.height)
+        } else {
+            result.origin = PanelDocking.constrainedOrigin(result.origin, rect: NSRect(origin: .zero, size: size), screen: screen)
+        }
         return (result, abs(scale - requested) > 0.00001)
     }
 
