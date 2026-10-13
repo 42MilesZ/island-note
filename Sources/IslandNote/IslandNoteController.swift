@@ -55,7 +55,7 @@ final class IslandPanel: NSPanel {
            let cursor = resizeCursorAtPoint?(event.locationInWindow) { cursor.set() }
     }
 
-    /// nonactivatingPanel 下菜单 keyEquivalent 不稳，这里显式把编辑命令派给 firstResponder；
+    /// 无主窗口的面板显式把编辑命令派给 firstResponder；
     /// 其余 ⌘ 组合吞掉，避免系统「滴」声。
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let flags = event.modifierFlags
@@ -309,11 +309,9 @@ final class IslandNoteController: NSObject {
             height: barH + 4
         )
 
-        #if ISLAND_EVENT_PROBE && ISLAND_ACTIVATING_PANEL
+        // The editor explicitly activates on expansion. Construct an activating
+        // panel so native gesture delivery follows the same focus lifecycle.
         let panelStyle: NSWindow.StyleMask = [.borderless]
-        #else
-        let panelStyle: NSWindow.StyleMask = [.borderless, .nonactivatingPanel]
-        #endif
         panel = IslandPanel(
             contentRect: winFrame,
             styleMask: panelStyle,
@@ -563,15 +561,14 @@ final class IslandNoteController: NSObject {
                 return e
             }
             let handled = self.handleMagnify(e)
-            #if ISLAND_EVENT_PROBE && ISLAND_MAGNIFY_FORWARD
-            if handled { EventDeliveryProbe.shared.observe(.handledForwarded, event: e) }
-            return e
-            #else
             #if ISLAND_EVENT_PROBE
-            if handled { EventDeliveryProbe.shared.observe(.consumed, event: e) }
+            if handled { EventDeliveryProbe.shared.observe(.handledForwarded, event: e) }
+            #else
+            _ = handled
             #endif
-            return handled ? nil : e
-            #endif
+            // Resize once here, while allowing AppKit to finish the native
+            // gesture lifecycle. The editor's scroll view does not magnify.
+            return e
         }
         // A release can arrive outside the original handle or in another app.
         let gu = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] e in

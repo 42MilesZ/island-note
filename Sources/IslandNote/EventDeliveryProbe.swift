@@ -1,6 +1,21 @@
 #if ISLAND_EVENT_PROBE
 import AppKit
 
+#if ISLAND_LAYER_DISPLAY
+/// Times the complete public display call, including backing-store synchronization.
+final class ProbeTextLayer: CATextLayer {
+    override func display() {
+        let started = ProcessInfo.processInfo.systemUptime
+        super.display()
+        let elapsed = (ProcessInfo.processInfo.systemUptime - started) * 1000
+        guard Thread.isMainThread else { return }
+        MainActor.assumeIsolated {
+            EventDeliveryProbe.shared.layerDisplay(name: name ?? "status-text", durationMS: elapsed)
+        }
+    }
+}
+#endif
+
 /// Only the dedicated probe build observes dispatch. It never changes an event.
 @objc(IslandDiagnosticApplication)
 final class IslandDiagnosticApplication: NSApplication {
@@ -12,7 +27,7 @@ final class IslandDiagnosticApplication: NSApplication {
 
 @MainActor
 final class EventDeliveryProbe {
-    enum Stage: String, Codable { case application, monitor, consumed, handledForwarded, window, windowAfterDispatch, viewport, resizeFrame, nativeCheckpoint }
+    enum Stage: String, Codable { case application, monitor, consumed, handledForwarded, window, windowAfterDispatch, viewport, resizeFrame, nativeCheckpoint, layerDisplay }
     struct RecognizerState: Codable {
         let type: String
         let state: Int
@@ -129,6 +144,12 @@ final class EventDeliveryProbe {
     }
 
     func endViewportSession() { lastFrame = nil }
+
+    func layerDisplay(name: String, durationMS: Double) {
+        guard isEnabled(), let snapshot = state?() else { return }
+        record(stage: .layerDisplay, target: name, durationMS: durationMS,
+            state: snapshot, now: ProcessInfo.processInfo.systemUptime, lifecycle: durationMS >= 16)
+    }
 
     func resizeFrame(started: Double, windowMoved: Double) {
         let now = ProcessInfo.processInfo.systemUptime

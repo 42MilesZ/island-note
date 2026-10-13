@@ -111,7 +111,11 @@ final class NoteEditorView: NSView {
     private var isStatusHovered = false
     private var showsHoverStatus = false
     private let syncButton = StatusIndicatorButton(title: "", target: nil, action: nil)
+    #if ISLAND_EVENT_PROBE && ISLAND_LAYER_DISPLAY
+    private let syncLabel = ProbeTextLayer()
+    #else
     private let syncLabel = CATextLayer()
+    #endif
     private var syncButtonWidth: NSLayoutConstraint!
     let outlineModel = HeadingOutlineModel()
     private var outlineRefresh: DispatchWorkItem?
@@ -217,6 +221,7 @@ final class NoteEditorView: NSView {
         syncButton.layer?.cornerRadius = 12
         syncButton.layer?.masksToBounds = true
         syncLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        syncLabel.name = "sync-status-label"
         syncLabel.fontSize = 12
         syncLabel.truncationMode = .end
         syncLabel.foregroundColor = NSColor(white: 0.86, alpha: 1).cgColor
@@ -342,12 +347,15 @@ final class NoteEditorView: NSView {
         case .busy: color = NSColor(white: 0.68, alpha: 1)
         case .neutral: color = NSColor(white: 0.40, alpha: 1)
         }
+        let changesColor = statusDot.backgroundColor != color.cgColor
         let previousColor = statusDot.presentation()?.backgroundColor ?? statusDot.backgroundColor
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        statusDot.backgroundColor = color.cgColor
+        if changesColor { statusDot.backgroundColor = color.cgColor }
         CATransaction.commit()
-        SettingsPalette.animate(statusDot, key: "shadowColor", value: color.cgColor, duration: 0.24)
+        if statusDot.shadowColor != color.cgColor {
+            SettingsPalette.animate(statusDot, key: "shadowColor", value: color.cgColor, duration: 0.24)
+        }
         let reduceMotion = motionIsReduced()
         if (!isBusy || localSaveError != nil || reduceMotion), statusDot.animation(forKey: "sync-busy") != nil {
             let opacity = statusDot.presentation()?.opacity ?? statusDot.opacity
@@ -360,12 +368,14 @@ final class NoteEditorView: NSView {
             statusDot.add(settle, forKey: "status-opacity")
         }
         if !reduceMotion {
-            let fade = CABasicAnimation(keyPath: "backgroundColor")
-            fade.fromValue = previousColor
-            fade.toValue = color.cgColor
-            fade.duration = 0.24
-            fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            statusDot.add(fade, forKey: "status-color")
+            if changesColor {
+                let fade = CABasicAnimation(keyPath: "backgroundColor")
+                fade.fromValue = previousColor
+                fade.toValue = color.cgColor
+                fade.duration = 0.24
+                fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                statusDot.add(fade, forKey: "status-color")
+            }
             if isBusy, localSaveError == nil, statusDot.animation(forKey: "sync-busy") == nil {
                 let pulse = CABasicAnimation(keyPath: "opacity")
                 pulse.fromValue = statusDot.presentation()?.opacity ?? statusDot.opacity
@@ -399,7 +409,12 @@ final class NoteEditorView: NSView {
             // changes can overlap without an old completion hiding a new label.
             let opacity = syncLabel.presentation()?.opacity ?? syncLabel.opacity
             if opacity > 0 {
+                #if ISLAND_EVENT_PROBE && ISLAND_LAYER_DISPLAY
+                let outgoing = ProbeTextLayer()
+                #else
                 let outgoing = CATextLayer()
+                #endif
+                outgoing.name = "sync-status-outgoing"
                 outgoing.font = syncLabel.font
                 outgoing.fontSize = syncLabel.fontSize
                 outgoing.truncationMode = syncLabel.truncationMode
@@ -419,12 +434,18 @@ final class NoteEditorView: NSView {
             syncLabel.removeAnimation(forKey: "opacity")
             syncLabel.opacity = 0
         }
-        syncLabel.string = visibleText
-        syncLabel.frame = CGRect(x: 22, y: 4, width: textWidth, height: 16)
-        syncButtonWidth.constant = width
-        layoutSubtreeIfNeeded()
+        // CATextLayer redraws even when the assigned string is unchanged.
+        // Compare model targets so an in-flight transition keeps its original clock.
+        if syncLabel.string as? String != visibleText { syncLabel.string = visibleText }
+        let labelFrame = CGRect(x: 22, y: 4, width: textWidth, height: 16)
+        if syncLabel.frame != labelFrame { syncLabel.frame = labelFrame }
+        if changesGeometry {
+            syncButtonWidth.constant = width
+            layoutSubtreeIfNeeded()
+        }
         syncButton.updateTrackingAreas()
-        statusDot.position = CGPoint(x: expanded ? 15 : 12, y: 12)
+        let dotPosition = CGPoint(x: expanded ? 15 : 12, y: 12)
+        if statusDot.position != dotPosition { statusDot.position = dotPosition }
         CATransaction.commit()
         if changesGeometry {
             let duration = motionIsReduced() ? 0.08 : 0.24
@@ -451,7 +472,7 @@ final class NoteEditorView: NSView {
             syncLabel.opacity = 1
             CATransaction.commit()
             syncLabel.add(fade, forKey: "opacity")
-        } else {
+        } else if syncLabel.opacity != (expanded ? Float(1) : Float(0)) {
             SettingsPalette.animate(syncLabel, key: "opacity", value: expanded ? Float(1) : Float(0), duration: 0.16)
         }
         let amber = NSColor(red: 0.94, green: 0.70, blue: 0.38, alpha: 1)
@@ -462,9 +483,13 @@ final class NoteEditorView: NSView {
         case .success: tint = Self.successColor
         default: tint = NSColor(white: 0.86, alpha: 1)
         }
-        SettingsPalette.animate(syncLabel, key: "foregroundColor", value: tint.cgColor, duration: 0.24)
+        if syncLabel.foregroundColor != tint.cgColor {
+            SettingsPalette.animate(syncLabel, key: "foregroundColor", value: tint.cgColor, duration: 0.24)
+        }
         let background = tint.withAlphaComponent(expanded ? 0.10 : 0)
-        SettingsPalette.animate(buttonLayer, key: "backgroundColor", value: background.cgColor, duration: 0.24)
+        if buttonLayer.backgroundColor != background.cgColor {
+            SettingsPalette.animate(buttonLayer, key: "backgroundColor", value: background.cgColor, duration: 0.24)
+        }
     }
 
     private func setStatusHovered(_ hovered: Bool) {

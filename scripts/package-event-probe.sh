@@ -4,22 +4,23 @@ cd "$(dirname "$0")/.."
 probe_flags=(-Xswiftc -DISLAND_EVENT_PROBE)
 probe_name=event-probe
 probe_build=202610131
-if [[ "${PROBE_FORWARD_MAGNIFY:-0}" == 1 ]]; then
-    probe_name=event-probe-forward
-    probe_build=202610132
-    probe_flags+=(-Xswiftc -DISLAND_MAGNIFY_FORWARD)
-fi
 if [[ "${PROBE_GESTURE_SNAPSHOT:-0}" == 1 ]]; then
     probe_name=event-probe-native
     probe_build=202610133
     probe_flags+=(-Xswiftc -DISLAND_GESTURE_SNAPSHOT)
 fi
-if [[ "${PROBE_ACTIVATING_PANEL:-0}" == 1 ]]; then
-    probe_name=event-probe-activating
-    probe_build=202610134
-    probe_flags+=(-Xswiftc -DISLAND_ACTIVATING_PANEL)
-fi
 scratch="$PWD/.build/$probe_name"
+if [[ "${PROBE_LAYER_DISPLAY:-0}" == 1 ]]; then
+    probe_name=event-probe-layer
+    probe_build=202610135
+    probe_flags+=(-Xswiftc -DISLAND_LAYER_DISPLAY)
+    scratch="$PWD/.build/$probe_name"
+fi
+if [[ "${PROBE_RESIZE_FIX:-0}" == 1 ]]; then
+    probe_name=event-probe-resize-fix
+    probe_build=202610136
+    scratch="$PWD/.build/$probe_name"
+fi
 swift_bin="${SWIFT_BIN:-swift}"
 "$swift_bin" build -c release --scratch-path "$scratch" --product IslandNote --disable-sandbox \
     "${probe_flags[@]}" -Xswiftc -debug-prefix-map -Xswiftc "$PWD=."

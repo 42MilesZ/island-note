@@ -47,19 +47,16 @@ It excludes note text, file names, key events and pointer positions. Sampled val
 retain fractional timestamps and event timestamps for cross-stage alignment;
 lifecycle events are retained without sampling. Per-stage/type receipt counters
 count unsampled events too. Do not compare the number of sampled rows as packet loss.
-A handled pinch normally stops at the monitor, so an absent window-stage entry
-alone does not indicate a fault. Event age measures time since the event timestamp,
+A handled pinch resizes once in the monitor and continues through native window
+dispatch; `handledForwarded` records that decision. Event age measures time since the event timestamp,
 not physical gesture-recognition latency; viewport intervals during edge dragging
 also include pauses in hand movement. Real gesture delivery requires on-device
 reproduction; passing the build and startup self-test does not confirm it.
 
-`PROBE_FORWARD_MAGNIFY=1 bash scripts/package-event-probe.sh` builds the single-variable
-dispatch experiment separately at `.build/event-probe-forward/IslandNote-Diagnostics.app`.
-It runs the same resize handler once, then forwards the original magnify event to
-AppKit instead of consuming it. Motion and geometry are unchanged. The probe marks
-these events as `handledForwarded` and records native scroll magnification and font
-size at window-dispatch lifecycle boundaries to check for unintended native zoom.
-Ordinary builds and the baseline probe keep the existing consumption behavior.
+The main editor panel is constructed as an activating panel. Its scroll view keeps
+native text magnification disabled while the original magnify events continue
+through AppKit. Font size and native scroll magnification are recorded at dispatch
+lifecycle boundaries to detect unintended native zoom.
 The `resizeFrame` stage times the full resize update, including the floating
 window-origin call (`windowMoveMS`); the narrower `viewport` timer excludes that call.
 
@@ -68,15 +65,18 @@ With diagnostics enabled and the note expanded, it adds a read-only native view
 snapshot every five seconds: bounded hierarchy paths, runtime classes, recognizer
 states and event-delay flags, touch masks, exclusivity and first-responder class.
 It never resets or changes a recognizer. These fields contain no note or accessibility text.
-For a snapshot build that keeps the forwarding experiment enabled, use both
-`PROBE_FORWARD_MAGNIFY=1 PROBE_GESTURE_SNAPSHOT=1 bash scripts/package-event-probe.sh`.
 The log reports view truncation and per-view recognizer counts (at most 16 states per view).
 
-Add `PROBE_ACTIVATING_PANEL=1` for an independent `.build/event-probe-activating` bundle
-whose panel is created without `.nonactivatingPanel`. This changes only initial
-panel style; it never toggles that bit on a live window. Keep the other two options
-enabled when comparing with the forwarding/native-snapshot build. Ordinary builds
-retain their original panel style, motion and event handling.
+`PROBE_LAYER_DISPLAY=1` adds a `CATextLayer.display()` timer to the owned status
+labels and builds `.build/event-probe-layer/IslandNote-Diagnostics.app`. The
+`layerDisplay` stage includes the complete synchronous display call; ordinary
+samples are limited to 10 Hz and calls lasting at least 16 ms are retained.
+Layer names identify the current/outgoing status label, never its text. Combine
+with `PROBE_GESTURE_SNAPSHOT=1` when comparing native gesture state as well.
+`PROBE_RESIZE_FIX=1` selects the separate `.build/event-probe-resize-fix` output
+for local A/B runs. It changes no runtime behavior. Preserve the original baseline
+binary: every rebuild uses current source, including the fixes. Historical
+forwarding and activation experiments are described in `docs/diagnostics/pinch-resize.md`.
 
 
 ## Run
