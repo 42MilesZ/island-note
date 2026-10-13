@@ -14,6 +14,11 @@ if [[ "${PROBE_GESTURE_SNAPSHOT:-0}" == 1 ]]; then
     probe_build=202610133
     probe_flags+=(-Xswiftc -DISLAND_GESTURE_SNAPSHOT)
 fi
+if [[ "${PROBE_ACTIVATING_PANEL:-0}" == 1 ]]; then
+    probe_name=event-probe-activating
+    probe_build=202610134
+    probe_flags+=(-Xswiftc -DISLAND_ACTIVATING_PANEL)
+fi
 scratch="$PWD/.build/$probe_name"
 swift_bin="${SWIFT_BIN:-swift}"
 "$swift_bin" build -c release --scratch-path "$scratch" --product IslandNote --disable-sandbox \

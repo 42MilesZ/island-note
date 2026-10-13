@@ -653,6 +653,7 @@ final class NoteEditorView: NSView {
         var result = EventDeliveryProbe.NativeState(allowsMagnification: scroll?.allowsMagnification,
             magnification: scroll.map { Double($0.magnification) },
             fontPointSize: text?.font.map { Double($0.pointSize) })
+        result.nonactivatingPanel = window?.styleMask.contains(.nonactivatingPanel)
         guard includeGestures, let root = window?.contentView else { return result }
         let responder = window?.firstResponder
         result.firstResponderType = responder.map { String(NSStringFromClass(type(of: $0)).prefix(160)) }

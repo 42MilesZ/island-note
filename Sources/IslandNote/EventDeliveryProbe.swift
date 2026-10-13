@@ -36,6 +36,7 @@ final class EventDeliveryProbe {
         var firstResponderPath: String? = nil
         var gestureViews: [GestureViewState]? = nil
         var viewLimitReached: Bool? = nil
+        var nonactivatingPanel: Bool? = nil
     }
     struct Entry: Codable {
         let time: Date

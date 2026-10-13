@@ -72,6 +72,12 @@ For a snapshot build that keeps the forwarding experiment enabled, use both
 `PROBE_FORWARD_MAGNIFY=1 PROBE_GESTURE_SNAPSHOT=1 bash scripts/package-event-probe.sh`.
 The log reports view truncation and per-view recognizer counts (at most 16 states per view).
 
+Add `PROBE_ACTIVATING_PANEL=1` for an independent `.build/event-probe-activating` bundle
+whose panel is created without `.nonactivatingPanel`. This changes only initial
+panel style; it never toggles that bit on a live window. Keep the other two options
+enabled when comparing with the forwarding/native-snapshot build. Ordinary builds
+retain their original panel style, motion and event handling.
+
 
 ## Run
 

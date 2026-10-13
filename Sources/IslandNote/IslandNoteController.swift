@@ -309,9 +309,14 @@ final class IslandNoteController: NSObject {
             height: barH + 4
         )
 
+        #if ISLAND_EVENT_PROBE && ISLAND_ACTIVATING_PANEL
+        let panelStyle: NSWindow.StyleMask = [.borderless]
+        #else
+        let panelStyle: NSWindow.StyleMask = [.borderless, .nonactivatingPanel]
+        #endif
         panel = IslandPanel(
             contentRect: winFrame,
-            styleMask: [.borderless, .nonactivatingPanel],
+            styleMask: panelStyle,
             backing: .buffered,
             defer: false
         )

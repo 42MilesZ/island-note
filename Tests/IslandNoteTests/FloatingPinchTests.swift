@@ -40,6 +40,11 @@ final class FloatingPinchTests: XCTestCase {
         let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? IslandPanel }.first {
             !existing.contains(ObjectIdentifier($0))
         })
+        #if ISLAND_EVENT_PROBE && ISLAND_ACTIVATING_PANEL
+        XCTAssertFalse(panel.styleMask.contains(.nonactivatingPanel))
+        #else
+        XCTAssertTrue(panel.styleMask.contains(.nonactivatingPanel))
+        #endif
         defer { panel.close() }
         controller.expand()
         settle()
