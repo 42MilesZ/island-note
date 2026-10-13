@@ -36,6 +36,9 @@ final class IslandPanel: NSPanel {
     var resizeCursorAtPoint: ((NSPoint) -> NSCursor?)?
 
     override func sendEvent(_ event: NSEvent) {
+        #if ISLAND_EVENT_PROBE
+        EventDeliveryProbe.shared.observe(.window, event: event)
+        #endif
         super.sendEvent(event)
         // Resolve after the editor's cursor handlers so its I-beam cannot cover
         // the resize indication. The resolver uses the exact mouse-down hit area.
@@ -175,6 +178,10 @@ final class IslandNoteController: NSObject {
         installMainMenu()
         setup()
         bindStore()
+        #if ISLAND_EVENT_PROBE
+        EventDeliveryProbe.shared.configure(isEnabled: { [weak self] in self?.diagnostics.isEnabled ?? false },
+            state: { [weak self] in self?.diagnosticState() })
+        #endif
         self.diagnostics.record(.checkpoint, state: diagnosticState())
         if enableSync, self.preferences.flomoEnabled { setupSync() }
         }
@@ -517,6 +524,9 @@ final class IslandNoteController: NSObject {
             return self.editor.handleKey(e)
         }
         let lm = NSEvent.addLocalMonitorForEvents(matching: .magnify) { [weak self] e in
+            #if ISLAND_EVENT_PROBE
+            EventDeliveryProbe.shared.observe(.monitor, event: e)
+            #endif
             guard let self else { return e }
             guard e.window === self.panel else {
                 self.diagnostics.record(.pinchReceived, state: self.diagnosticState(), delta: e.magnification, phase: e.phase)
@@ -524,7 +534,11 @@ final class IslandNoteController: NSObject {
                 if e.phase.contains(.ended) || e.phase.contains(.cancelled) { self.resetPinchGesture() }
                 return e
             }
-            return self.handleMagnify(e) ? nil : e
+            let handled = self.handleMagnify(e)
+            #if ISLAND_EVENT_PROBE
+            if handled { EventDeliveryProbe.shared.observe(.consumed, event: e) }
+            #endif
+            return handled ? nil : e
         }
         // A release can arrive outside the original handle or in another app.
         let gu = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] e in
@@ -535,6 +549,12 @@ final class IslandNoteController: NSObject {
             return e
         }
         monitors = [g, l, gc, lc, gr, lr, lk, lm, gu, lu].compactMap { $0 }
+        #if ISLAND_EVENT_PROBE
+        if let probe = NSEvent.addLocalMonitorForEvents(matching: [.rotate, .gesture, .beginGesture, .endGesture, .scrollWheel], handler: { event in
+            EventDeliveryProbe.shared.observe(.monitor, event: event)
+            return event
+        }) { monitors.append(probe) }
+        #endif
     }
 
     private func expandedFrame(for size: PanelSize) -> NSRect { viewportFrame(size: size.dimensions) }
@@ -774,16 +794,25 @@ final class IslandNoteController: NSObject {
         let rect = viewportFrame(size: size)
         guard rect != expandedRect else { return }
         expandedRect = rect
+        #if ISLAND_EVENT_PROBE
+        let probeStarted = ProcessInfo.processInfo.systemUptime
+        #endif
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         editor.frame = expandedRect
         editor.layoutSubtreeIfNeeded()
+        #if ISLAND_EVENT_PROBE
+        let probeLayoutEnded = ProcessInfo.processInfo.systemUptime
+        #endif
         updateViewportHitAreas()
         if mode == .expanded {
             dragInteraction.viewportDidChange()
             dragInteraction.recoverDisplay(rect: expandedRect)
         }
         CATransaction.commit()
+        #if ISLAND_EVENT_PROBE
+        EventDeliveryProbe.shared.viewport(started: probeStarted, layoutEnded: probeLayoutEnded)
+        #endif
     }
 
     private func updateViewportHitAreas() {
@@ -838,7 +867,12 @@ final class IslandNoteController: NSObject {
 
     private func updateEditorResizeLifecycle() {
         if resizeTimer != nil || pinchSession != nil || edgeResize != nil { editor.beginInteractiveResize() }
-        else { editor.endInteractiveResize() }
+        else {
+            editor.endInteractiveResize()
+            #if ISLAND_EVENT_PROBE
+            EventDeliveryProbe.shared.endViewportSession()
+            #endif
+        }
     }
 
     // MARK: - 悬停 / 点击
@@ -942,7 +976,12 @@ final class IslandNoteController: NSObject {
             settings.onConfigureFlomo = { [weak self] in self?.showSyncSettings() }
             settings.onDiagnosticToggle = { [weak self] in self?.toggleDiagnostics() }
             settings.onExportDiagnostics = { [weak self] in self?.exportDiagnostics() }
-            settings.onClearDiagnostics = { [weak self] in self?.diagnostics.clear() }
+            settings.onClearDiagnostics = { [weak self] in
+                self?.diagnostics.clear()
+                #if ISLAND_EVENT_PROBE
+                EventDeliveryProbe.shared.clear()
+                #endif
+            }
             settings.onPrivacy = { [weak self] in self?.showPrivacyPolicy() }
             settings.onClose = { [weak self] in self?.showingSyncSettings = false }
             settings.onOpenNote = { [weak self] in self?.chooseNoteFile(saveCopy: false) }
@@ -1138,6 +1177,9 @@ final class IslandNoteController: NSObject {
     func flushEditor() {
         editor.flushPending()
         diagnostics.flush()
+        #if ISLAND_EVENT_PROBE
+        EventDeliveryProbe.shared.flush()
+        #endif
     }
 
     private func setupSync() {

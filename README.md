@@ -33,6 +33,26 @@ The most recent 300 events stay in the app's Application Support `IslandNote/Dia
 changed magnification is sampled at most every 0.1 seconds, with lifecycle events and decisions retained.
 Exported copies remain at the location you choose. Findings are interaction rules and may not identify every cause.
 
+For event-delivery investigations, `bash scripts/package-event-probe.sh` creates a
+separate signed Release bundle at `.build/event-probe/IslandNote-Diagnostics.app`.
+Its startup self-test verifies the custom application entry point without opening
+a note or window. Ordinary builds do not include this probe. Quit the existing
+app before running the probe bundle; both use the same note, preferences and signing identity.
+
+With local diagnostics enabled, the probe writes a separate bounded local log,
+`IslandNote/Diagnostics/delivery-events.jsonl` under Application Support. It records
+gesture type/phase at application, monitor and window dispatch, consumed events,
+event age, viewport duration, layout duration and viewport update intervals.
+It excludes note text, file names, key events and pointer positions. Sampled values
+retain fractional timestamps and event timestamps for cross-stage alignment;
+lifecycle events are retained without sampling. Per-stage/type receipt counters
+count unsampled events too. Do not compare the number of sampled rows as packet loss.
+A handled pinch normally stops at the monitor, so an absent window-stage entry
+alone does not indicate a fault. Event age measures time since the event timestamp,
+not physical gesture-recognition latency; viewport intervals during edge dragging
+also include pauses in hand movement. Real gesture delivery requires on-device
+reproduction; passing the build and startup self-test does not confirm it.
+
 
 ## Run
 
