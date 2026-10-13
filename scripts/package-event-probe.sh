@@ -1,10 +1,18 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-scratch="$PWD/.build/event-probe"
+probe_flags=(-Xswiftc -DISLAND_EVENT_PROBE)
+probe_name=event-probe
+probe_build=202610131
+if [[ "${PROBE_FORWARD_MAGNIFY:-0}" == 1 ]]; then
+    probe_name=event-probe-forward
+    probe_build=202610132
+    probe_flags+=(-Xswiftc -DISLAND_MAGNIFY_FORWARD)
+fi
+scratch="$PWD/.build/$probe_name"
 swift_bin="${SWIFT_BIN:-swift}"
 "$swift_bin" build -c release --scratch-path "$scratch" --product IslandNote --disable-sandbox \
-    -Xswiftc -DISLAND_EVENT_PROBE -Xswiftc -debug-prefix-map -Xswiftc "$PWD=."
+    "${probe_flags[@]}" -Xswiftc -debug-prefix-map -Xswiftc "$PWD=."
 bin_dir="$("$swift_bin" build -c release --scratch-path "$scratch" --show-bin-path)"
 "$bin_dir/IslandNote" --event-probe-self-test
 app="$scratch/IslandNote-Diagnostics.app"
@@ -17,7 +25,8 @@ for resource in AppIcon.icns ThirdPartyNotices.txt PrivacyInfo.xcprivacy; do
 done
 cp Resources/Info.plist "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c 'Set :NSPrincipalClass IslandDiagnosticApplication' "$app/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${PROBE_BUILD_NUMBER:-202610131}" "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${PROBE_BUILD_NUMBER:-$probe_build}" "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${APP_VERSION:-1.0}" "$app/Contents/Info.plist"
 identity="${SIGN_IDENTITY:-}"
 if [[ -z "$identity" ]]; then
     identities=()

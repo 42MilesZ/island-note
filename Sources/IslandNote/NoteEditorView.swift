@@ -646,6 +646,16 @@ final class NoteEditorView: NSView {
         return nil
     }
 
+    #if ISLAND_EVENT_PROBE
+    func probeNativeState() -> EventDeliveryProbe.NativeState {
+        let text = hostedTextView(in: hostingView)
+        let scroll = text?.enclosingScrollView ?? hostedScrollView(in: hostingView)
+        return EventDeliveryProbe.NativeState(allowsMagnification: scroll?.allowsMagnification,
+            magnification: scroll.map { Double($0.magnification) },
+            fontPointSize: text?.font.map { Double($0.pointSize) })
+    }
+    #endif
+
     private func hostedScrollView(in view: NSView) -> NSScrollView? {
         if let scrollView = view as? NSScrollView { return scrollView }
         for child in view.subviews {

@@ -17,14 +17,14 @@ final class EventDeliveryProbeTests: XCTestCase {
         probe.record(stage: .application, eventType: NSEvent.EventType.magnify.rawValue, state: state, now: 1)
         XCTAssertTrue(probe.entries.isEmpty)
         probe.isEnabled = { true }
-        for stage in [EventDeliveryProbe.Stage.application, .monitor, .consumed] {
+        for stage in [EventDeliveryProbe.Stage.application, .monitor, .consumed, .handledForwarded, .windowAfterDispatch] {
             probe.record(stage: stage, eventType: NSEvent.EventType.magnify.rawValue, state: state, now: 1)
             probe.record(stage: stage, eventType: NSEvent.EventType.magnify.rawValue, state: state, now: 1.01)
             probe.record(stage: stage, eventType: NSEvent.EventType.magnify.rawValue,
                 phase: NSEvent.Phase.ended.rawValue, state: state, now: 1.02, lifecycle: true)
         }
-        XCTAssertEqual(probe.entries.count, 6)
-        XCTAssertEqual(probe.entries.filter { $0.phase == NSEvent.Phase.ended.rawValue }.count, 3)
+        XCTAssertEqual(probe.entries.count, 10)
+        XCTAssertEqual(probe.entries.filter { $0.phase == NSEvent.Phase.ended.rawValue }.count, 5)
         probe.flush()
         let file = folder.appendingPathComponent("delivery-events.jsonl")
         let first = try XCTUnwrap(Data(contentsOf: file).split(separator: 0x0a).first)
@@ -39,12 +39,18 @@ final class EventDeliveryProbeTests: XCTestCase {
         let probe = EventDeliveryProbe(directory: folder)
         probe.isEnabled = { true }
         for i in 0..<(EventDeliveryProbe.maximumEntries + 20) {
-            probe.record(stage: .viewport, durationMS: .infinity, layoutMS: .nan,
+            probe.record(stage: .viewport, durationMS: .infinity, windowMoveMS: .nan, layoutMS: .nan,
+                nativeState: EventDeliveryProbe.NativeState(allowsMagnification: false,
+                    magnification: .infinity, fontPointSize: .nan),
                 state: state, now: Double(i), lifecycle: true)
         }
         XCTAssertEqual(probe.entries.count, EventDeliveryProbe.maximumEntries)
         XCTAssertNil(probe.entries.last?.durationMS)
+        XCTAssertNil(probe.entries.last?.windowMoveMS)
         XCTAssertNil(probe.entries.last?.layoutMS)
+        XCTAssertEqual(probe.entries.last?.nativeState?.allowsMagnification, false)
+        XCTAssertNil(probe.entries.last?.nativeState?.magnification)
+        XCTAssertNil(probe.entries.last?.nativeState?.fontPointSize)
         probe.flush()
     }
 

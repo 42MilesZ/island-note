@@ -34,12 +34,21 @@ final class IslandPanel: NSPanel {
     override var canBecomeMain: Bool { false }
     var onSettings: (() -> Void)?
     var resizeCursorAtPoint: ((NSPoint) -> NSCursor?)?
+    #if ISLAND_EVENT_PROBE
+    var probeNativeState: (() -> EventDeliveryProbe.NativeState)?
+    #endif
 
     override func sendEvent(_ event: NSEvent) {
         #if ISLAND_EVENT_PROBE
         EventDeliveryProbe.shared.observe(.window, event: event)
         #endif
         super.sendEvent(event)
+        #if ISLAND_EVENT_PROBE
+        if event.type == .magnify,
+           !event.phase.intersection([.began, .ended, .cancelled]).isEmpty {
+            EventDeliveryProbe.shared.observe(.windowAfterDispatch, event: event, nativeState: probeNativeState?())
+        }
+        #endif
         // Resolve after the editor's cursor handlers so its I-beam cannot cover
         // the resize indication. The resolver uses the exact mouse-down hit area.
         if [.mouseMoved, .mouseEntered, .mouseExited, .cursorUpdate].contains(event.type),
@@ -336,6 +345,12 @@ final class IslandNoteController: NSObject {
         island.onAccessibilityPress = { [weak self] in self?.expand() }
 
         editor = NoteEditorView(frame: expandedRect)
+        #if ISLAND_EVENT_PROBE
+        panel.probeNativeState = { [weak self] in
+            self?.editor.probeNativeState() ?? EventDeliveryProbe.NativeState(
+                allowsMagnification: nil, magnification: nil, fontPointSize: nil)
+        }
+        #endif
         editor.autoresizingMask = []
         editor.onTextChanged = { [weak self] text in
             self?.store.save(text)
@@ -535,10 +550,15 @@ final class IslandNoteController: NSObject {
                 return e
             }
             let handled = self.handleMagnify(e)
+            #if ISLAND_EVENT_PROBE && ISLAND_MAGNIFY_FORWARD
+            if handled { EventDeliveryProbe.shared.observe(.handledForwarded, event: e) }
+            return e
+            #else
             #if ISLAND_EVENT_PROBE
             if handled { EventDeliveryProbe.shared.observe(.consumed, event: e) }
             #endif
             return handled ? nil : e
+            #endif
         }
         // A release can arrive outside the original handle or in another app.
         let gu = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp) { [weak self] e in
@@ -705,11 +725,20 @@ final class IslandNoteController: NSObject {
     }
 
     private func displayResize(_ rect: NSRect, floating: Bool) {
+        #if ISLAND_EVENT_PROBE
+        let probeStarted = ProcessInfo.processInfo.systemUptime
+        #endif
         if floating {
             let local = viewportFrame(size: rect.size)
             panel.setFrameOrigin(NSPoint(x: rect.minX - local.minX, y: rect.minY - local.minY))
         }
+        #if ISLAND_EVENT_PROBE
+        let probeWindowMoved = ProcessInfo.processInfo.systemUptime
+        #endif
         applyViewport(size: rect.size)
+        #if ISLAND_EVENT_PROBE
+        EventDeliveryProbe.shared.resizeFrame(started: probeStarted, windowMoved: probeWindowMoved)
+        #endif
     }
 
     private func followResize(to rect: NSRect, floating: Bool) {

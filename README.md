@@ -53,6 +53,16 @@ not physical gesture-recognition latency; viewport intervals during edge draggin
 also include pauses in hand movement. Real gesture delivery requires on-device
 reproduction; passing the build and startup self-test does not confirm it.
 
+`PROBE_FORWARD_MAGNIFY=1 bash scripts/package-event-probe.sh` builds the single-variable
+dispatch experiment separately at `.build/event-probe-forward/IslandNote-Diagnostics.app`.
+It runs the same resize handler once, then forwards the original magnify event to
+AppKit instead of consuming it. Motion and geometry are unchanged. The probe marks
+these events as `handledForwarded` and records native scroll magnification and font
+size at window-dispatch lifecycle boundaries to check for unintended native zoom.
+Ordinary builds and the baseline probe keep the existing consumption behavior.
+The `resizeFrame` stage times the full resize update, including the floating
+window-origin call (`windowMoveMS`); the narrower `viewport` timer excludes that call.
+
 
 ## Run
 

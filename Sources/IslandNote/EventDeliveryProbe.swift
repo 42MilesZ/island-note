@@ -12,7 +12,12 @@ final class IslandDiagnosticApplication: NSApplication {
 
 @MainActor
 final class EventDeliveryProbe {
-    enum Stage: String, Codable { case application, monitor, consumed, window, viewport }
+    enum Stage: String, Codable { case application, monitor, consumed, handledForwarded, window, windowAfterDispatch, viewport, resizeFrame }
+    struct NativeState: Codable {
+        let allowsMagnification: Bool?
+        let magnification: Double?
+        let fontPointSize: Double?
+    }
     struct Entry: Codable {
         let time: Date
         let uptime: Double
@@ -25,8 +30,10 @@ final class EventDeliveryProbe {
         let delta: Double?
         let queueDelayMS: Double?
         let durationMS: Double?
+        let windowMoveMS: Double?
         let layoutMS: Double?
         let viewportIntervalMS: Double?
+        let nativeState: NativeState?
         let state: InteractionDiagnosticState
     }
     static let shared = EventDeliveryProbe()
@@ -51,7 +58,7 @@ final class EventDeliveryProbe {
         self.state = state
     }
 
-    func observe(_ stage: Stage, event: NSEvent) {
+    func observe(_ stage: Stage, event: NSEvent, nativeState: NativeState? = nil) {
         let now = ProcessInfo.processInfo.systemUptime
         guard Self.eventTypes.contains(NSEvent.EventTypeMask(rawValue: 1 << event.type.rawValue)),
               isEnabled() else { return }
@@ -69,7 +76,7 @@ final class EventDeliveryProbe {
             target: event.window is IslandPanel ? "note" : event.window == nil ? "none" : "other",
             delta: event.type == .magnify ? finite(Double(event.magnification)) : nil,
             queueDelayMS: stage == .application && age >= 0 && age <= 600_000 ? finite(age) : nil,
-            state: snapshot, now: now, lifecycle: lifecycle)
+            nativeState: nativeState, state: snapshot, now: now, lifecycle: lifecycle)
     }
 
     func viewport(started: Double, layoutEnded: Double) {
@@ -85,6 +92,14 @@ final class EventDeliveryProbe {
 
     func endViewportSession() { lastFrame = nil }
 
+    func resizeFrame(started: Double, windowMoved: Double) {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard isEnabled(), shouldSample(.resizeFrame, nil, now: now, lifecycle: false),
+              let snapshot = state?() else { return }
+        record(stage: .resizeFrame, durationMS: (now - started) * 1000,
+            windowMoveMS: (windowMoved - started) * 1000, state: snapshot, now: now)
+    }
+
     private func samplingKey(_ stage: Stage, _ type: UInt?) -> String {
         stage.rawValue + ":" + String(type ?? 0)
     }
@@ -98,7 +113,9 @@ final class EventDeliveryProbe {
     func record(stage: Stage, eventType: UInt? = nil, eventTimestamp: Double? = nil,
                 receiptCount: UInt64? = nil, phase: UInt? = nil, target: String? = nil,
                 delta: Double? = nil, queueDelayMS: Double? = nil, durationMS: Double? = nil,
+                windowMoveMS: Double? = nil,
                 layoutMS: Double? = nil, viewportIntervalMS: Double? = nil,
+                nativeState: NativeState? = nil,
                 state: InteractionDiagnosticState, now: Double, lifecycle: Bool = false) {
         guard isEnabled() else { return }
         let key = samplingKey(stage, eventType)
@@ -108,7 +125,10 @@ final class EventDeliveryProbe {
             eventTimestamp: eventTimestamp.flatMap(finite), receiptCount: receiptCount,
             phase: phase, target: target, delta: delta.flatMap(finite),
             queueDelayMS: queueDelayMS.flatMap(finite), durationMS: durationMS.flatMap(finite),
-            layoutMS: layoutMS.flatMap(finite), viewportIntervalMS: viewportIntervalMS.flatMap(finite), state: state))
+            windowMoveMS: windowMoveMS.flatMap(finite),
+            layoutMS: layoutMS.flatMap(finite), viewportIntervalMS: viewportIntervalMS.flatMap(finite),
+            nativeState: nativeState.map { NativeState(allowsMagnification: $0.allowsMagnification,
+                magnification: $0.magnification.flatMap(finite), fontPointSize: $0.fontPointSize.flatMap(finite)) }, state: state))
         if entries.count > Self.maximumEntries { entries.removeFirst(entries.count - Self.maximumEntries) }
         guard timer == nil else { return }
         let timer = Timer(timeInterval: 1, repeats: false) { [weak self] _ in
