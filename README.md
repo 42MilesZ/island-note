@@ -63,6 +63,15 @@ Ordinary builds and the baseline probe keep the existing consumption behavior.
 The `resizeFrame` stage times the full resize update, including the floating
 window-origin call (`windowMoveMS`); the narrower `viewport` timer excludes that call.
 
+Add `PROBE_GESTURE_SNAPSHOT=1` to build at `.build/event-probe-native/IslandNote-Diagnostics.app`.
+With diagnostics enabled and the note expanded, it adds a read-only native view
+snapshot every five seconds: bounded hierarchy paths, runtime classes, recognizer
+states and event-delay flags, touch masks, exclusivity and first-responder class.
+It never resets or changes a recognizer. These fields contain no note or accessibility text.
+For a snapshot build that keeps the forwarding experiment enabled, use both
+`PROBE_FORWARD_MAGNIFY=1 PROBE_GESTURE_SNAPSHOT=1 bash scripts/package-event-probe.sh`.
+The log reports view truncation and per-view recognizer counts (at most 16 states per view).
+
 
 ## Run
 

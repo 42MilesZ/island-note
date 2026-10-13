@@ -9,6 +9,11 @@ if [[ "${PROBE_FORWARD_MAGNIFY:-0}" == 1 ]]; then
     probe_build=202610132
     probe_flags+=(-Xswiftc -DISLAND_MAGNIFY_FORWARD)
 fi
+if [[ "${PROBE_GESTURE_SNAPSHOT:-0}" == 1 ]]; then
+    probe_name=event-probe-native
+    probe_build=202610133
+    probe_flags+=(-Xswiftc -DISLAND_GESTURE_SNAPSHOT)
+fi
 scratch="$PWD/.build/$probe_name"
 swift_bin="${SWIFT_BIN:-swift}"
 "$swift_bin" build -c release --scratch-path "$scratch" --product IslandNote --disable-sandbox \

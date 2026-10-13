@@ -69,5 +69,30 @@ final class EventDeliveryProbeTests: XCTestCase {
         XCTAssertTrue(probe.entries.isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
     }
+
+    func testNativeSnapshotIsBoundedAndDoesNotChangeRecognizerConfiguration() throws {
+        _ = NSApplication.shared
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 460),
+            styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        let editor = NoteEditorView(frame: window.contentView!.bounds)
+        window.contentView = editor
+        let recognizer = NSClickGestureRecognizer()
+        recognizer.isEnabled = false
+        recognizer.delaysMagnificationEvents = true
+        editor.addGestureRecognizer(recognizer)
+        let before = editor.probeNativeState(includeGestures: true)
+        let recorded = try XCTUnwrap(before.gestureViews?.first?.recognizers.first)
+        XCTAssertFalse(recorded.enabled)
+        XCTAssertTrue(recorded.delaysMagnification)
+        XCTAssertFalse(recognizer.isEnabled)
+        XCTAssertTrue(recognizer.delaysMagnificationEvents)
+        XCTAssertTrue(try XCTUnwrap(before.gestureViews).allSatisfy { $0.type.count <= 160 })
+        for _ in 0..<140 { editor.addSubview(NSView()) }
+        let bounded = editor.probeNativeState(includeGestures: true)
+        XCTAssertEqual(bounded.gestureViews?.count, 128)
+        XCTAssertEqual(bounded.viewLimitReached, true)
+    }
 }
 #endif

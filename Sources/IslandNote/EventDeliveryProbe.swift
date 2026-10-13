@@ -12,11 +12,30 @@ final class IslandDiagnosticApplication: NSApplication {
 
 @MainActor
 final class EventDeliveryProbe {
-    enum Stage: String, Codable { case application, monitor, consumed, handledForwarded, window, windowAfterDispatch, viewport, resizeFrame }
+    enum Stage: String, Codable { case application, monitor, consumed, handledForwarded, window, windowAfterDispatch, viewport, resizeFrame, nativeCheckpoint }
+    struct RecognizerState: Codable {
+        let type: String
+        let state: Int
+        let enabled: Bool
+        let delaysMagnification: Bool
+        let delaysRotation: Bool
+    }
+    struct GestureViewState: Codable {
+        let path: String
+        let type: String
+        let exclusiveBehavior: Int?
+        let allowedTouchTypes: UInt
+        let recognizerCount: Int
+        let recognizers: [RecognizerState]
+    }
     struct NativeState: Codable {
         let allowsMagnification: Bool?
-        let magnification: Double?
-        let fontPointSize: Double?
+        var magnification: Double?
+        var fontPointSize: Double?
+        var firstResponderType: String? = nil
+        var firstResponderPath: String? = nil
+        var gestureViews: [GestureViewState]? = nil
+        var viewLimitReached: Bool? = nil
     }
     struct Entry: Codable {
         let time: Date
@@ -46,6 +65,8 @@ final class EventDeliveryProbe {
     private var receipts: [String: UInt64] = [:]
     private var lastFrame: Double?
     private var timer: Timer?
+    private var nativeTimer: Timer?
+    private var nativeState: (() -> NativeState)?
     private let directory: URL?
     private let writer = DispatchQueue(label: "local.projects.island-note.event-probe", qos: .utility)
 
@@ -53,9 +74,25 @@ final class EventDeliveryProbe {
         self.directory = directory
     }
 
-    func configure(isEnabled: @escaping () -> Bool, state: @escaping () -> InteractionDiagnosticState?) {
+    func configure(isEnabled: @escaping () -> Bool, state: @escaping () -> InteractionDiagnosticState?,
+                   nativeState: (() -> NativeState)? = nil) {
         self.isEnabled = isEnabled
         self.state = state
+        self.nativeState = nativeState
+        nativeTimer?.invalidate()
+        nativeTimer = nil
+        guard nativeState != nil else { return }
+        let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.nativeCheckpoint() }
+        }
+        nativeTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func nativeCheckpoint() {
+        guard isEnabled(), let snapshot = state?(), snapshot.mode == "expanded", let nativeState else { return }
+        record(stage: .nativeCheckpoint, nativeState: nativeState(), state: snapshot,
+            now: ProcessInfo.processInfo.systemUptime)
     }
 
     func observe(_ stage: Stage, event: NSEvent, nativeState: NativeState? = nil) {
@@ -109,7 +146,7 @@ final class EventDeliveryProbe {
         return lastSample[samplingKey(stage, type)].map { now - $0 >= 0.1 } ?? true
     }
 
-    // Explicit numeric allowlist. No text, file names, key events, or pointer positions.
+    // Numeric and runtime-type allowlist. No note text, file names, key events, or pointer positions.
     func record(stage: Stage, eventType: UInt? = nil, eventTimestamp: Double? = nil,
                 receiptCount: UInt64? = nil, phase: UInt? = nil, target: String? = nil,
                 delta: Double? = nil, queueDelayMS: Double? = nil, durationMS: Double? = nil,
@@ -127,8 +164,12 @@ final class EventDeliveryProbe {
             queueDelayMS: queueDelayMS.flatMap(finite), durationMS: durationMS.flatMap(finite),
             windowMoveMS: windowMoveMS.flatMap(finite),
             layoutMS: layoutMS.flatMap(finite), viewportIntervalMS: viewportIntervalMS.flatMap(finite),
-            nativeState: nativeState.map { NativeState(allowsMagnification: $0.allowsMagnification,
-                magnification: $0.magnification.flatMap(finite), fontPointSize: $0.fontPointSize.flatMap(finite)) }, state: state))
+            nativeState: nativeState.map {
+                var value = $0
+                value.magnification = $0.magnification.flatMap(finite)
+                value.fontPointSize = $0.fontPointSize.flatMap(finite)
+                return value
+            }, state: state))
         if entries.count > Self.maximumEntries { entries.removeFirst(entries.count - Self.maximumEntries) }
         guard timer == nil else { return }
         let timer = Timer(timeInterval: 1, repeats: false) { [weak self] _ in
@@ -186,6 +227,6 @@ final class EventDeliveryProbe {
         }
     }
 
-    deinit { timer?.invalidate() }
+    deinit { timer?.invalidate(); nativeTimer?.invalidate() }
 }
 #endif

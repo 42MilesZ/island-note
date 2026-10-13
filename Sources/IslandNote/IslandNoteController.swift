@@ -188,8 +188,16 @@ final class IslandNoteController: NSObject {
         setup()
         bindStore()
         #if ISLAND_EVENT_PROBE
+        #if ISLAND_GESTURE_SNAPSHOT
+        EventDeliveryProbe.shared.configure(isEnabled: { [weak self] in self?.diagnostics.isEnabled ?? false },
+            state: { [weak self] in self?.diagnosticState() }, nativeState: { [weak self] in
+                self?.editor.probeNativeState(includeGestures: true) ?? EventDeliveryProbe.NativeState(
+                    allowsMagnification: nil, magnification: nil, fontPointSize: nil)
+            })
+        #else
         EventDeliveryProbe.shared.configure(isEnabled: { [weak self] in self?.diagnostics.isEnabled ?? false },
             state: { [weak self] in self?.diagnosticState() })
+        #endif
         #endif
         self.diagnostics.record(.checkpoint, state: diagnosticState())
         if enableSync, self.preferences.flomoEnabled { setupSync() }

@@ -647,12 +647,44 @@ final class NoteEditorView: NSView {
     }
 
     #if ISLAND_EVENT_PROBE
-    func probeNativeState() -> EventDeliveryProbe.NativeState {
+    func probeNativeState(includeGestures: Bool = false) -> EventDeliveryProbe.NativeState {
         let text = hostedTextView(in: hostingView)
         let scroll = text?.enclosingScrollView ?? hostedScrollView(in: hostingView)
-        return EventDeliveryProbe.NativeState(allowsMagnification: scroll?.allowsMagnification,
+        var result = EventDeliveryProbe.NativeState(allowsMagnification: scroll?.allowsMagnification,
             magnification: scroll.map { Double($0.magnification) },
             fontPointSize: text?.font.map { Double($0.pointSize) })
+        guard includeGestures, let root = window?.contentView else { return result }
+        let responder = window?.firstResponder
+        result.firstResponderType = responder.map { String(NSStringFromClass(type(of: $0)).prefix(160)) }
+        var views: [EventDeliveryProbe.GestureViewState] = []
+        var visited = 0
+        var limitReached = false
+        func visit(_ view: NSView, path: String) {
+            guard visited < 128 else { return }
+            visited += 1
+            if view === responder { result.firstResponderPath = path }
+            let exclusive: Int?
+            if #available(macOS 27, *) { exclusive = view.exclusiveGestureBehavior.rawValue }
+            else { exclusive = nil }
+            let nativeRecognizers = view.gestureRecognizers
+            let recognizers = nativeRecognizers.prefix(16).map {
+                EventDeliveryProbe.RecognizerState(type: String(NSStringFromClass(type(of: $0)).prefix(160)),
+                    state: $0.state.rawValue, enabled: $0.isEnabled,
+                    delaysMagnification: $0.delaysMagnificationEvents, delaysRotation: $0.delaysRotationEvents)
+            }
+            views.append(EventDeliveryProbe.GestureViewState(path: path,
+                type: String(NSStringFromClass(type(of: view)).prefix(160)), exclusiveBehavior: exclusive,
+                allowedTouchTypes: view.allowedTouchTypes.rawValue,
+                recognizerCount: nativeRecognizers.count, recognizers: recognizers))
+            for (index, child) in view.subviews.enumerated() {
+                guard visited < 128 else { limitReached = true; break }
+                visit(child, path: path + "." + String(index))
+            }
+        }
+        visit(root, path: "0")
+        result.gestureViews = views
+        result.viewLimitReached = limitReached
+        return result
     }
     #endif
 
