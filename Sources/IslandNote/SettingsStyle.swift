@@ -47,14 +47,14 @@ final class SettingsButton: NSButton {
     private var hovered = false
     private var pressed = false
     private var tracking: NSTrackingArea?
-    init(title: String, target: AnyObject?, action: Selector?, quiet: Bool = false, emphasized: Bool = false) {
+    init(title: String, target: AnyObject?, action: Selector?, quiet: Bool = false, emphasized: Bool = false, height: CGFloat = 36) {
         self.quiet = quiet; self.emphasized = emphasized; super.init(frame: .zero)
         self.title = title; self.target = target; self.action = action
         isBordered = false; bezelStyle = .regularSquare
         font = .systemFont(ofSize: emphasized ? 14 : 13, weight: emphasized ? .medium : .regular)
         wantsLayer = true; layer?.cornerRadius = 12; layer?.cornerCurve = .continuous
         translatesAutoresizingMaskIntoConstraints = false
-        heightAnchor.constraint(equalToConstant: 36).isActive = true
+        heightAnchor.constraint(equalToConstant: height).isActive = true
         if !title.isEmpty { widthAnchor.constraint(greaterThanOrEqualToConstant: (title as NSString).size(withAttributes: [.font: font!]).width + 28).isActive = true }
         updateColors(animated: false)
     }

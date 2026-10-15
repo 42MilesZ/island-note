@@ -315,3 +315,20 @@
 "More options" = "More options";
 "Decide Later" = "Decide Later";
 "Append Flomo after Island Note in the same memo. Both originals are backed up." = "Append Flomo after Island Note in the same memo. Both originals are backed up.";
+
+// Side-by-side text differences
+"Append Both Full Copies" = "Append Both Full Copies";
+"Previous merge is awaiting verification." = "Previous merge is awaiting verification.";
+"Last upload is awaiting verification." = "Last upload is awaiting verification.";
+"A previous change is awaiting verification." = "A previous change is awaiting verification.";
+"Append unavailable: " = "Append unavailable: ";
+"Collapse unchanged text" = "Collapse unchanged text";
+"Preparing comparison…" = "Preparing comparison…";
+"− Only Island Note" = "− Only Island Note";
+"+ Only Flomo" = "+ Only Flomo";
+"Previous difference" = "Previous difference";
+"Next difference" = "Next difference";
+"No differences" = "No differences";
+"Difference %d of %d" = "Difference %d of %d";
+"… %d unchanged lines …" = "… %d unchanged lines …";
+"Large changes use block highlighting to keep comparison responsive." = "Large changes use block highlighting to keep comparison responsive.";

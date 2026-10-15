@@ -315,3 +315,20 @@
 "More options" = "更多选项";
 "Decide Later" = "稍后处理";
 "Append Flomo after Island Note in the same memo. Both originals are backed up." = "在同一条笔记中将 Flomo 内容接在 Island Note 后面，并备份两份原文。";
+
+// Side-by-side text differences
+"Append Both Full Copies" = "拼接两份全文";
+"Previous merge is awaiting verification." = "上次合并仍待核验。";
+"Last upload is awaiting verification." = "上次上传仍待核验。";
+"A previous change is awaiting verification." = "上次修改仍待核验。";
+"Append unavailable: " = "暂不能拼接：";
+"Collapse unchanged text" = "折叠相同内容";
+"Preparing comparison…" = "正在对比…";
+"− Only Island Note" = "− 仅 Island Note 有";
+"+ Only Flomo" = "+ 仅 Flomo 有";
+"Previous difference" = "上一处差异";
+"Next difference" = "下一处差异";
+"No differences" = "内容相同";
+"Difference %d of %d" = "第 %d / %d 处差异";
+"… %d unchanged lines …" = "… 相同的 %d 行 …";
+"Large changes use block highlighting to keep comparison responsive." = "较大改动使用整块标注，以保持对比流畅。";
