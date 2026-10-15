@@ -1,7 +1,7 @@
 import AppKit
 import OSLog
 
-enum SyncReviewAction { case choose(SyncChoice), resume }
+enum SyncReviewAction { case choose(SyncChoice), merge(String), resume }
 
 /// A stable comparison viewport. TextKit 1 lays out each immutable copy once;
 /// native scrolling does not rebuild text, constraints or Markdown previews.
@@ -23,6 +23,11 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
     private var scrollObservations: [NSObjectProtocol] = []
     private var comparisonTask: Task<Void, Never>?
     private var comparisonWork: Task<SyncDiff, Never>?
+    private var mergeTask: Task<Void, Never>?
+    private var mergeWork: Task<SyncMerge, Never>?
+    private(set) var mergePreview: SyncMergePreviewWindowController?
+    private var savedMergeDraft: String?
+    private(set) var mergeButton: SettingsButton!
     private(set) var comparison: SyncDiff?
     private(set) var presentation: SyncDiffPresentation?
     struct AlignedBlock { let top: CGFloat; let height: CGFloat; let changed: Bool }
@@ -37,22 +42,20 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
     private var documentHeight: CGFloat = 0
     private var selectedDifference = -1
     private var canChooseCopy = false
-    private var canCombine = false
     private var isResizing = false
     private var navigationTimer: Timer?
     private let logger = Logger(subsystem: "local.projects.island-note", category: "SyncReview")
 
     convenience init(conflict: SyncConflict, sync: FlomoSync) {
+        let pending = sync.record.pendingMerge
+        let draft = pending?.remoteVersion != nil && pending?.localBefore == conflict.local
+            && pending?.remoteBefore == SyncDocument.fromFlomo(conflict.remote.content) ? pending?.merged : nil
         self.init(conflict: conflict, phase: sync.phase, lastVerifiedAt: sync.record.lastVerifiedAt,
-                  canChoose: sync.record.enabled && !sync.isStopped,
-                  canMerge: sync.record.enabled && sync.record.pendingWrite == nil && sync.record.pendingMerge == nil,
-                  reviewError: sync.reviewError,
-                  mergeUnavailableReason: sync.record.pendingMerge != nil ? "Previous merge is awaiting verification."
-                    : sync.record.pendingWrite != nil ? "Last upload is awaiting verification." : nil)
+                  canChoose: sync.record.enabled && !sync.isStopped, reviewError: sync.reviewError, savedMergeDraft: draft)
     }
 
-    init(conflict: SyncConflict, phase: SyncPhase, lastVerifiedAt: Date?, canChoose: Bool, canMerge: Bool, reviewError: String? = nil,
-         mergeUnavailableReason: String? = nil, preparedComparison: SyncDiff? = nil) {
+    init(conflict: SyncConflict, phase: SyncPhase, lastVerifiedAt: Date?, canChoose: Bool, reviewError: String? = nil,
+         preparedComparison: SyncDiff? = nil, savedMergeDraft: String? = nil) {
         let available = NSScreen.main?.visibleFrame.size ?? NSSize(width: 1280, height: 800)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: min(880, available.width - 80),
                                                   height: min(680, available.height - 80)),
@@ -63,9 +66,9 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
         window.contentMinSize = NSSize(width: 720, height: 500)
         super.init(window: window)
         window.delegate = self
-        canChooseCopy = canChoose; canCombine = canChoose && canMerge
-        build(conflict: conflict, phase: phase, lastVerifiedAt: lastVerifiedAt, canChoose: canChoose, canMerge: canMerge,
-              reviewError: reviewError, mergeUnavailableReason: mergeUnavailableReason)
+        self.savedMergeDraft = savedMergeDraft
+        canChooseCopy = canChoose
+        build(conflict: conflict, phase: phase, lastVerifiedAt: lastVerifiedAt, canChoose: canChoose, reviewError: reviewError)
         observeScrolling()
         if let preparedComparison { installComparison(preparedComparison) }
         else {
@@ -100,7 +103,7 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
         self.comparison = comparison
         rebuildPresentation()
         localButton.isEnabled = canChooseCopy; remoteButton.isEnabled = canChooseCopy
-        moreMenu.items.first?.isEnabled = canCombine
+        mergeButton.isEnabled = canChooseCopy
         collapseMenuItem.isEnabled = comparison.blocks.contains { $0.kind == .equal && min($0.leftLineCount, $0.rightLineCount) > 14 }
         differenceLabel.toolTip = comparison.usedCoarseComparison
             ? L10n.tr("Large changes use block highlighting to keep comparison responsive.") : nil
@@ -271,52 +274,42 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
         if !differenceIndices.isEmpty { revealDifference(min(index, differenceIndices.count - 1), animated: false) }
     }
 
-    private func build(conflict: SyncConflict, phase: SyncPhase, lastVerifiedAt: Date?, canChoose: Bool, canMerge: Bool,
-                       reviewError: String?, mergeUnavailableReason: String?) {
+    private func build(conflict: SyncConflict, phase: SyncPhase, lastVerifiedAt: Date?, canChoose: Bool,
+                       reviewError: String?) {
         guard let window else { return }
         let root = SettingsSurface(role: .page)
         window.contentView = root
         let header = NSStackView()
-        header.orientation = .vertical; header.alignment = .leading; header.spacing = 10
-        let title = label("Choose one copy for both", size: 26)
+        header.orientation = .vertical; header.alignment = .leading; header.spacing = 8
+        let title = label("Compare and merge", size: 22)
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        scrollLockButton = SettingsButton(title: "", target: self, action: #selector(toggleScrollLock))
+        scrollLockButton = SettingsButton(title: "", target: self, action: #selector(toggleScrollLock), height: 32)
         scrollLockButton.setButtonType(.pushOnPushOff)
         scrollLockButton.state = .on
         scrollLockButton.imagePosition = .imageOnly
-        scrollLockButton.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        scrollLockButton.widthAnchor.constraint(equalToConstant: 32).isActive = true
         scrollLockButton.setAccessibilityIdentifier("syncReview.scrollLock")
         scrollLockButton.setAccessibilityLabel(L10n.tr("Synchronized scrolling"))
         scrollLockButton.setAccessibilityRole(.checkBox)
         updateScrollLockAppearance(animated: false)
-        moreButton = SettingsButton(title: "", target: self, action: #selector(showMore))
+        moreButton = SettingsButton(title: "", target: self, action: #selector(showMore), height: 32)
         moreButton.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: nil)
         moreButton.imagePosition = .imageOnly
-        moreButton.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        moreButton.widthAnchor.constraint(equalToConstant: 32).isActive = true
         moreButton.setAccessibilityIdentifier("syncReview.more")
         moreButton.setAccessibilityLabel(L10n.tr("More options"))
         moreButton.toolTip = L10n.tr("More options")
         moreMenu.autoenablesItems = false
-        let combine = NSMenuItem(title: L10n.tr("Append Both Full Copies"), action: #selector(merge), keyEquivalent: "")
-        combine.identifier = NSUserInterfaceItemIdentifier("syncReview.combine")
-        combine.target = self; combine.isEnabled = false
-        combine.toolTip = L10n.tr("Append Flomo after Island Note in the same memo. Both originals are backed up.")
-        moreMenu.addItem(combine)
-        let blockedReason = !canChoose ? "Sync is paused. Resume to apply a choice."
-            : !canMerge ? (mergeUnavailableReason ?? "A previous change is awaiting verification.") : nil
-        if let blockedReason {
-            let reason = NSMenuItem(title: L10n.tr(blockedReason), action: nil, keyEquivalent: "")
-            reason.isEnabled = false; moreMenu.addItem(reason)
-            combine.toolTip = L10n.tr(blockedReason)
-        }
-        moreMenu.addItem(.separator())
         collapseMenuItem = NSMenuItem(title: L10n.tr("Collapse unchanged text"), action: #selector(toggleUnchanged), keyEquivalent: "")
         collapseMenuItem.target = self; collapseMenuItem.isEnabled = false
         moreMenu.addItem(collapseMenuItem)
         let later = NSMenuItem(title: L10n.tr("Decide Later"), action: #selector(cancel), keyEquivalent: "")
         later.identifier = NSUserInterfaceItemIdentifier("syncReview.later")
         later.target = self; moreMenu.addItem(later)
-        let controls = NSStackView(views: [scrollLockButton, moreButton])
+        mergeButton = SettingsButton(title: L10n.tr("Merge…"), target: self, action: #selector(merge), height: 32)
+        mergeButton.isEnabled = false
+        mergeButton.setAccessibilityIdentifier("syncReview.merge")
+        let controls = NSStackView(views: [mergeButton!, scrollLockButton!, moreButton!])
         controls.spacing = 8
         let titleRow = NSStackView(views: [title, NSView(), controls])
         titleRow.orientation = .horizontal; titleRow.alignment = .centerY; titleRow.spacing = 16
@@ -324,23 +317,20 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
         titleRow.widthAnchor.constraint(equalTo: header.widthAnchor).isActive = true
         let timeRow = NSStackView(views: [
             SyncReviewMetadataTag(symbol: "arrow.triangle.2.circlepath", key: "Last sync",
-                                  value: lastVerifiedAt.map { Self.dateText($0, compact: true) } ?? L10n.tr("No verified sync"),
+                                  value: lastVerifiedAt.map(Self.shortDateText) ?? L10n.tr("No verified sync"),
                                   detail: lastVerifiedAt.map(Self.dateText)),
             SyncReviewMetadataTag(symbol: "clock", key: "Compared",
-                                  value: Self.dateText(conflict.capturedAt, compact: true), detail: Self.dateText(conflict.capturedAt))
+                                  value: Self.shortDateText(conflict.capturedAt), detail: Self.dateText(conflict.capturedAt))
         ])
         timeRow.spacing = 10
-        header.addArrangedSubview(timeRow)
         let warning: String?
         switch phase {
         case .connectionFailed, .offline, .authorizationRequired:
             warning = L10n.tr("Could not refresh. These are the last captured copies.")
-        case .verifyWrite, .formattingChanged:
-            warning = canChoose && !canMerge ? L10n.tr("Append unavailable: ") + L10n.tr(blockedReason!) : L10n.tr("Last upload unconfirmed.")
         default:
             warning = nil
         }
-        if let warning = reviewError ?? warning ?? (canChoose && !canMerge ? L10n.tr("Append unavailable: ") + L10n.tr(blockedReason!) : nil) {
+        if let warning = reviewError ?? warning {
             let field = label(warning, size: 13, secondary: true, wrapping: true, localized: false)
             field.setAccessibilityIdentifier("syncReview.warning")
             header.addArrangedSubview(field)
@@ -349,20 +339,18 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
 
         let toolbar = NSStackView()
         toolbar.orientation = .horizontal; toolbar.alignment = .centerY; toolbar.spacing = 8
-        let legend = label("Highlighted text differs between copies", size: 13, secondary: true)
-        legend.setAccessibilityIdentifier("syncReview.legend")
         differenceLabel = label("Preparing comparison…", size: 13, secondary: true)
         differenceLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
         differenceLabel.setAccessibilityIdentifier("syncReview.differencePosition")
         differenceLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         previousDifferenceButton = navigationButton(symbol: "chevron.up", title: "Previous difference", action: #selector(previousDifference))
         nextDifferenceButton = navigationButton(symbol: "chevron.down", title: "Next difference", action: #selector(nextDifference))
-        for view in [legend, NSView(), differenceLabel!, previousDifferenceButton!, nextDifferenceButton!] {
+        for view in [timeRow, NSView(), differenceLabel!, previousDifferenceButton!, nextDifferenceButton!] {
             toolbar.addArrangedSubview(view)
         }
 
         let columns = NSStackView()
-        columns.orientation = .horizontal; columns.alignment = .top; columns.spacing = 20; columns.distribution = .fillEqually
+        columns.orientation = .horizontal; columns.alignment = .top; columns.spacing = 16; columns.distribution = .fillEqually
         let left = column(title: "Island Note", updated: conflict.localUpdatedAt.map { Self.dateText($0, compact: true) },
                           fullDate: conflict.localUpdatedAt.map(Self.dateText), text: conflict.local,
                           action: #selector(useLocal), buttonTitle: "Use Island Note", enabled: false)
@@ -379,17 +367,9 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
 
         let footer = NSStackView()
         footer.orientation = .horizontal; footer.alignment = .centerY; footer.spacing = 12
-        let shield = NSImageView(image: NSImage(systemSymbolName: "checkmark.shield", accessibilityDescription: nil)!)
-        shield.contentTintColor = SettingsPalette.secondary
-        shield.widthAnchor.constraint(equalToConstant: 14).isActive = true
-        shield.heightAnchor.constraint(equalToConstant: 14).isActive = true
-        footer.addArrangedSubview(shield)
-        let preservation = label(canChoose ? "Originals are backed up before replacement." : "Sync is paused. Resume to apply a choice.",
-                                 size: 13, secondary: true, wrapping: true)
-        preservation.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        footer.addArrangedSubview(preservation)
-        footer.addArrangedSubview(NSView())
         if !canChoose {
+            footer.addArrangedSubview(label("Sync is paused. Resume to apply a choice.", size: 13, secondary: true, wrapping: true))
+            footer.addArrangedSubview(NSView())
             let resume = SettingsButton(title: L10n.tr("Resume Sync"), target: self, action: #selector(resume))
             resume.setAccessibilityIdentifier("syncReview.resume")
             resumeButton = resume; footer.addArrangedSubview(resume)
@@ -397,18 +377,19 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
 
         for view in [header, toolbar, columns, footer] { view.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(view) }
         NSLayoutConstraint.activate([
-            header.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 28),
-            header.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -28),
-            header.topAnchor.constraint(equalTo: root.topAnchor, constant: 22),
+            header.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 20),
+            header.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -20),
+            header.topAnchor.constraint(equalTo: root.topAnchor, constant: 16),
             toolbar.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 10),
             toolbar.leadingAnchor.constraint(equalTo: header.leadingAnchor), toolbar.trailingAnchor.constraint(equalTo: header.trailingAnchor),
-            columns.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 16),
+            columns.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 12),
             columns.leadingAnchor.constraint(equalTo: header.leadingAnchor), columns.trailingAnchor.constraint(equalTo: header.trailingAnchor),
-            columns.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -16),
+            columns.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: canChoose ? 0 : -12),
             left.view.heightAnchor.constraint(equalTo: columns.heightAnchor), right.view.heightAnchor.constraint(equalTo: columns.heightAnchor),
             footer.leadingAnchor.constraint(equalTo: header.leadingAnchor), footer.trailingAnchor.constraint(equalTo: header.trailingAnchor),
-            footer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -22)
+            footer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -18)
         ])
+        if canChoose { footer.heightAnchor.constraint(equalToConstant: 0).isActive = true }
         window.initialFirstResponder = localScroll.documentView
     }
 
@@ -416,13 +397,13 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
         -> (view: NSView, scroll: NSScrollView, button: SettingsButton) {
         let card = SettingsSurface(role: .card)
         let heading = NSStackView()
-        heading.orientation = .vertical; heading.alignment = .leading; heading.spacing = 8
+        heading.orientation = .vertical; heading.alignment = .leading; heading.spacing = 6
         let count = SyncReviewMetadataTag(symbol: "text.alignleft", value: L10n.format("%d characters", SyncDocument.count(text)))
         let name = NSStackView(views: [label(title, size: 18, localized: false), NSView(), count])
         name.alignment = .centerY; name.spacing = 8
         heading.addArrangedSubview(name)
         name.widthAnchor.constraint(equalTo: heading.widthAnchor).isActive = true
-        let time = SyncReviewMetadataTag(symbol: "clock", key: updated == nil ? nil : "Updated",
+        let time = SyncReviewMetadataTag(symbol: "clock",
                                          value: updated ?? L10n.tr("Update time unavailable"), detail: fullDate)
         heading.addArrangedSubview(time)
         time.widthAnchor.constraint(lessThanOrEqualTo: heading.widthAnchor).isActive = true
@@ -433,12 +414,12 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
         for view in [heading, scroll, button] { view.translatesAutoresizingMaskIntoConstraints = false; card.addSubview(view) }
         NSLayoutConstraint.activate([
             heading.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 18), heading.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -18),
-            heading.topAnchor.constraint(equalTo: card.topAnchor, constant: 18),
+            heading.topAnchor.constraint(equalTo: card.topAnchor, constant: 14),
             scroll.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 4), scroll.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -4),
-            scroll.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 14), scroll.bottomAnchor.constraint(equalTo: button.topAnchor, constant: -14),
+            scroll.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 10), scroll.bottomAnchor.constraint(equalTo: button.topAnchor, constant: -12),
             scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 80),
             button.leadingAnchor.constraint(equalTo: heading.leadingAnchor), button.trailingAnchor.constraint(equalTo: heading.trailingAnchor),
-            button.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -18)
+            button.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -14)
         ])
         return (card, scroll, button)
     }
@@ -474,6 +455,13 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
     }
 
     static func dateText(_ date: Date) -> String { dateText(date, compact: false) }
+
+    private static func shortDateText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.dateFormat = Calendar.current.isDate(date, equalTo: Date(), toGranularity: .year) ? "MM-dd HH:mm" : "yyyy-MM-dd HH:mm"
+        return formatter.string(from: date)
+    }
 
     static func dateText(_ date: Date, compact: Bool) -> String {
         let formatter = DateFormatter()
@@ -560,12 +548,33 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
 
     deinit {
         comparisonTask?.cancel(); comparisonWork?.cancel(); navigationTimer?.invalidate()
+        mergeTask?.cancel(); mergeWork?.cancel()
         for observation in scrollObservations { NotificationCenter.default.removeObserver(observation) }
     }
 
     @objc private func useLocal() { finish(.choose(.local)) }
     @objc private func useRemote() { finish(.choose(.remote)) }
-    @objc private func merge() { finish(.choose(.merge)) }
+    @objc private func merge() {
+        guard canChooseCopy, let comparison, mergeTask == nil else { return }
+        navigationTimer?.invalidate(); navigationTimer = nil
+        mergeButton.isEnabled = false
+        let draft = savedMergeDraft
+        let work = Task.detached(priority: .userInitiated) {
+            if let draft { return SyncMerge(text: draft) }
+            return SyncMerge.combine(local: comparison.left, remote: comparison.right)
+        }
+        mergeWork = work
+        mergeTask = Task { [weak self] in
+            let result = await work.value
+            guard !Task.isCancelled, let self, let window = self.window else { return }
+            defer { self.mergeTask = nil; self.mergeWork = nil; self.mergeButton.isEnabled = self.canChooseCopy }
+            let preview = SyncMergePreviewWindowController(text: result.text)
+            self.mergePreview = preview
+            let text = await preview.run(for: window)
+            self.mergePreview = nil
+            if let text, !Task.isCancelled { self.finish(.merge(text)) }
+        }
+    }
     @objc private func resume() { finish(.resume) }
     @objc private func cancel() { finish(nil) }
     override func cancelOperation(_ sender: Any?) { finish(nil) }
@@ -574,6 +583,7 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
     }
     func windowWillClose(_ notification: Notification) {
         comparisonTask?.cancel(); comparisonWork?.cancel(); navigationTimer?.invalidate()
+        mergeTask?.cancel(); mergeWork?.cancel(); mergePreview?.dismiss()
         finish(nil)
     }
     private func finish(_ choice: SyncReviewAction?) {

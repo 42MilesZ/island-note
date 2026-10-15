@@ -5,6 +5,7 @@ struct PendingMerge: Codable, Equatable {
     let localBefore: String
     let merged: String
     let remoteBefore: String
+    var remoteVersion: String? = nil
 }
 
 struct SyncRecord: Codable, Equatable {
@@ -201,7 +202,15 @@ final class FlomoSync {
         }
     }
 
-    func synchronize(choice: SyncChoice? = nil, reviewed: SyncConflict? = nil) async {
+    func synchronize(choice: SyncChoice? = nil, reviewed: SyncConflict? = nil, mergedText: String? = nil) async {
+        // A confirmation must not disappear because the background timer
+        // happened to start a request while the user was editing the preview.
+        if choice != nil {
+            while running {
+                guard !stopped, record.enabled, !Task.isCancelled else { return }
+                try? await Task.sleep(for: .milliseconds(30))
+            }
+        }
         guard !stopped, record.enabled, !running, let client, let readLocal else { return }
         running = true
         defer { running = false }
@@ -211,14 +220,15 @@ final class FlomoSync {
         var priorWriteIntent: SyncRecord?
         reviewError = nil
         do {
+            if choice == .merge, let mergedText { try backup(mergedText, name: "reviewed-merge-draft") }
             await settleEditorUpdates()
             guard record.enabled, generation == epoch else { return }
             let rawLocal = try readLocal()
             let local = SyncDocument.normalized(rawLocal)
-            guard local.isEmpty && record.memoID != nil || SyncDocument.issue(in: rawLocal) == nil else {
+            guard choice == .merge || local.isEmpty && record.memoID != nil || SyncDocument.issue(in: rawLocal) == nil else {
                 report(SyncDocument.issue(in: rawLocal)!, phase: SyncDocument.count(rawLocal) > SyncDocument.limit ? .tooLong : .unsupported); return
             }
-            guard SyncDocument.transferFits(local) else {
+            guard choice == .merge || SyncDocument.transferFits(local) else {
                 report("The note fits locally but needs a little more room for Flomo formatting. Shorten it before syncing.", phase: .tooLong); return
             }
             if conflict == nil { report("Checking the linked memo before applying any changes.", phase: .checking) }
@@ -254,24 +264,86 @@ final class FlomoSync {
                 return
             }
             let remoteText = SyncDocument.fromFlomo(remote.content)
-            guard SyncDocument.issue(in: remoteText) == nil else {
+            guard choice == .merge || SyncDocument.issue(in: remoteText) == nil else {
                 report("Flomo: " + (SyncDocument.issue(in: remoteText) ?? "Unsupported content"), phase: .unsupported); return
             }
 
-            var recoveredMerge = false
+            if let choice {
+                guard let reviewed, reviewed.local == rawLocal, reviewed.remote == remote else {
+                    showConflict(local: rawLocal, remote: remote, message: "A copy changed since review. Review the latest versions."); return
+                }
+                if choice == .merge {
+                    let merged = mergedText ?? SyncMerge.combine(local: rawLocal, remote: remoteText).text
+                    guard SyncDocument.issue(in: merged) == nil, SyncDocument.transferFits(merged) else {
+                        report("The merged note is too large or contains unsupported syntax. Both copies are preserved.", phase: .unsupported); return
+                    }
+                    guard let applyRemote else { throw SyncFailure.localUnavailable }
+                    // A reviewed merge supersedes an old uncertain upload, but
+                    // saves its text too, even when it is no longer either copy.
+                    try backup(remote.content, name: "flomo-before-merge")
+                    if let pending = record.pendingWrite { try backup(pending, name: "pending-upload-before-merge") }
+                    if let pending = record.pendingRemoteBaseline { try backup(pending, name: "pending-upload-remote-before-merge") }
+                    if let pending = record.pendingMerge {
+                        try backup(pending.localBefore, name: "interrupted-merge-local")
+                        try backup(pending.remoteBefore, name: "interrupted-merge-flomo")
+                        try backup(pending.merged, name: "interrupted-merge-result")
+                    }
+                    beforeUnsentIntent = record
+                    record.pendingMerge = PendingMerge(localBefore: rawLocal, merged: merged, remoteBefore: remoteText, remoteVersion: remote.updatedAt)
+                    try persist()
+                    beforeUnsentIntent = nil
+                    try applyRemote(rawLocal, merged)
+                    record.remoteBaseline = remoteText
+                    record.baseline = remoteText
+                    record.pendingWrite = nil
+                    record.pendingEncodedContent = nil
+                    record.pendingRemoteBaseline = nil
+                    record.pendingRemoteVersion = nil
+                    record.pendingMerge = nil
+                    record.reviewPhase = nil
+                    try persist()
+                    conflict = nil
+                    logger.info("Reviewed deduplicated merge saved locally; waiting for version-checked upload")
+                    report("Both copies are merged locally. The combined note is waiting to upload.", phase: .waiting)
+                    localChanged()
+                    return
+                }
+            }
+
             if let intent = record.pendingMerge {
-                if local == intent.merged {
+                if rawLocal == intent.merged {
                     record.baseline = intent.remoteBefore
                     record.remoteBaseline = intent.remoteBefore
-                    recoveredMerge = true
-                } else if rawLocal != intent.localBefore, choice == nil || choice == .merge {
-                    showConflict(local: rawLocal, remote: remote, message: "The previous merge was interrupted and the local note changed. Review the saved copies before continuing.")
+                    // New reviewed drafts already superseded the older upload.
+                    if intent.remoteVersion != nil {
+                        record.pendingWrite = nil; record.pendingEncodedContent = nil
+                    }
+                } else if choice == nil {
+                    guard rawLocal == intent.localBefore, let version = intent.remoteVersion,
+                          version == remote.updatedAt, intent.remoteBefore == remoteText else {
+                        showConflict(local: rawLocal, remote: remote, message: "The previous merge was interrupted and the local note changed. Review the saved copies before continuing.", phase: .verifyWrite)
+                        return
+                    }
+                    // The exact reviewed pair is still present. Retry the
+                    // durable draft with the same local compare-and-swap check.
+                    guard let applyRemote else { throw SyncFailure.localUnavailable }
+                    try applyRemote(rawLocal, intent.merged)
+                    record.baseline = remoteText; record.remoteBaseline = remoteText
+                    record.pendingWrite = nil; record.pendingEncodedContent = nil
+                    record.pendingMerge = nil; record.reviewPhase = nil
+                    try persist()
+                    conflict = nil
+                    logger.info("Interrupted reviewed merge recovered; waiting for version-checked upload")
+                    report("Both copies are merged locally. The combined note is waiting to upload.", phase: .waiting)
+                    localChanged()
                     return
+                } else {
+                    // Choosing one source explicitly supersedes a draft too.
+                    try backup(intent.merged, name: "unapplied-merge-before-replacement")
                 }
                 record.pendingMerge = nil
                 try persist()
             }
-            let wasAwaitingVerification = record.pendingWrite != nil || recoveredMerge
             var repairLegacyUpload = false
             if let pending = record.pendingWrite {
                 if SyncDocument.equivalent(local: pending, remote: remoteText) {
@@ -313,42 +385,11 @@ final class FlomoSync {
 
             var direction = repairLegacyUpload ? .push : SyncComparison.direction(baseline: record.baseline, remoteBaseline: record.remoteBaseline, local: local, remote: remoteText)
             if let choice {
-                guard let reviewed, reviewed.local == rawLocal, reviewed.remote == remote else {
-                    showConflict(local: rawLocal, remote: remote, message: "A copy changed since review. Review the latest versions."); return
-                }
-                if choice == .merge {
-                    guard !wasAwaitingVerification else {
-                        report("A combined version is already waiting for verification. Review or retry that version; merging again would duplicate text.", phase: .verifyWrite)
-                        return
-                    }
-                    let merged = SyncDocument.merging(local: rawLocal, remote: remoteText)
-                    guard SyncDocument.issue(in: merged) == nil, SyncDocument.transferFits(merged) else {
-                        report("The merged note is too large or contains unsupported syntax. Both copies are preserved.", phase: .unsupported); return
-                    }
-                    guard let applyRemote else { throw SyncFailure.localUnavailable }
-                    try backup(remote.content, name: "flomo-before-merge")
-                    record.pendingMerge = PendingMerge(localBefore: rawLocal, merged: merged, remoteBefore: remoteText)
-                    try persist()
-                    try applyRemote(rawLocal, merged)
-                    // The existing remote version is the comparison baseline for
-                    // the next upload; fetch it again to detect intervening edits.
-                    record.remoteBaseline = remoteText
-                    record.baseline = remoteText
-                    record.pendingWrite = nil
-                    record.pendingEncodedContent = nil
-                    record.pendingMerge = nil
-                    record.reviewPhase = nil
-                    try persist()
-                    conflict = nil
-                    report("Both copies are merged locally. The combined note is waiting to upload.", phase: .waiting)
-                    localChanged()
-                    return
-                }
                 direction = choice == .local ? .push : .pull
             }
             switch direction {
             case .conflict:
-                showConflict(local: rawLocal, remote: remote, message: record.baseline == nil ? "The linked memo and Island Note contain different text. Click Merge Both to preserve both in this same memo." : "Both copies changed since the last sync. Review them before continuing.", phase: record.baseline == nil ? .mergeRequired : .conflict)
+                showConflict(local: rawLocal, remote: remote, message: record.baseline == nil ? "The linked memo and Island Note contain different text. Review or merge them before continuing." : "Both copies changed since the last sync. Review them before continuing.", phase: record.baseline == nil ? .mergeRequired : .conflict)
             case .none:
                 record.lastVerifiedAt = Date()
                 record.remoteBaseline = remoteText

@@ -4,12 +4,12 @@ import XCTest
 
 @MainActor
 final class SyncDiffPresentationTests: XCTestCase {
-    private func controller(left: String, right: String, canMerge: Bool = true) -> FlomoConflictWindowController {
+    private func controller(left: String, right: String, awaitingVerification: Bool = false) -> FlomoConflictWindowController {
         _ = NSApplication.shared
         return FlomoConflictWindowController(conflict: SyncConflict(local: left,
             remote: FlomoMemo(id: "fixture", content: right, updatedAt: "2026-10-15T08:30:00+08:00")),
-            phase: canMerge ? .conflict : .verifyWrite, lastVerifiedAt: Date(timeIntervalSince1970: 1_792_000_000),
-            canChoose: true, canMerge: canMerge, mergeUnavailableReason: canMerge ? nil : "Last upload is awaiting verification.",
+            phase: awaitingVerification ? .verifyWrite : .conflict, lastVerifiedAt: Date(timeIntervalSince1970: 1_792_000_000),
+            canChoose: true,
             preparedComparison: SyncDiff.compare(left: left, right: right))
     }
 
@@ -215,7 +215,7 @@ final class SyncDiffPresentationTests: XCTestCase {
         _ = NSApplication.shared
         let conflict = SyncConflict(local: String(repeating: "中文长文与 emoji 👨‍👩‍👧‍👦\n", count: 800),
                                     remote: FlomoMemo(id: "test", content: "短版本", updatedAt: ""))
-        let review = FlomoConflictWindowController(conflict: conflict, phase: .conflict, lastVerifiedAt: nil, canChoose: true, canMerge: true)
+        let review = FlomoConflictWindowController(conflict: conflict, phase: .conflict, lastVerifiedAt: nil, canChoose: true)
         defer { review.window?.close() }
         XCTAssertNil(review.comparison)
         XCTAssertFalse(review.localButton.isEnabled)
@@ -224,7 +224,7 @@ final class SyncDiffPresentationTests: XCTestCase {
         XCTAssertNotNil(review.comparison)
         XCTAssertTrue(review.localButton.isEnabled)
         try assertAligned(review)
-        let closed = FlomoConflictWindowController(conflict: conflict, phase: .conflict, lastVerifiedAt: nil, canChoose: true, canMerge: true)
+        let closed = FlomoConflictWindowController(conflict: conflict, phase: .conflict, lastVerifiedAt: nil, canChoose: true)
         closed.window?.close()
         try await Task.sleep(for: .milliseconds(80))
         XCTAssertNil(closed.comparison)
@@ -263,7 +263,7 @@ final class SyncDiffPresentationTests: XCTestCase {
         }
         for language in [AppLanguage.chinese, .english] {
             L10n.language = language
-            let review = controller(left: left, right: right, canMerge: false)
+            let review = controller(left: left, right: right, awaitingVerification: true)
             defer { review.window?.close() }
             review.window?.setContentSize(NSSize(width: 720, height: 500))
             review.showWindow(nil); review.prepareTextLayout()

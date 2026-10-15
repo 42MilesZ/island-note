@@ -332,3 +332,13 @@
 "Difference %d of %d" = "第 %d / %d 处差异";
 "… %d unchanged lines …" = "… 相同的 %d 行 …";
 "Large changes use block highlighting to keep comparison responsive." = "较大改动使用整块标注，以保持对比流畅。";
+
+// Reviewed deduplicated merge
+"Compare and merge" = "对比与合并";
+"Merge…" = "合并…";
+"Merge preview" = "合并预览";
+"Shared text appears once. Different text is kept. Edit the result below." = "相同内容保留一份，不同内容均保留。可直接编辑。";
+"Merged text" = "合并后的内容";
+"Back to comparison" = "返回对比";
+"Merge and Sync" = "合并并同步";
+"The linked memo and Island Note contain different text. Review or merge them before continuing." = "关联的 Flomo 与 Island Note 内容不同，请对比或合并后继续。";

@@ -12,10 +12,12 @@ private final class FakeFlomo: FlomoServing {
     var fetchError: Error?
     var onCreate: (() -> Void)?
     var onFetch: (() -> Void)?
+    var beforeFetch: (() async -> Void)?
     var onUpdate: (() -> Void)?
     var changeOnWrite = false
     func fetch(id: String) async throws -> FlomoMemo {
         fetches += 1
+        await beforeFetch?()
         onFetch?()
         if let fetchError { throw fetchError }
         return memo
@@ -465,17 +467,151 @@ final class FlomoSyncTests: XCTestCase {
         sync.pause()
     }
 
-    func testUnverifiedMergedUploadCannotBeMergedAgain() async throws {
-        let (sync, _) = try make(SyncRecord(enabled: true, memoID: "test", baseline: "Base", pendingWrite: "Merged"))
+    func testUnverifiedUploadCanBeSupersededByAReviewedDeduplicatedMerge() async throws {
+        let (sync, url) = try make(SyncRecord(enabled: true, memoID: "test", baseline: "Base", pendingWrite: "An older upload"))
         let client = FakeFlomo()
-        client.memo = FlomoMemo(id: "test", content: "Changed formatting", updatedAt: "v2")
-        sync.readLocal = { "Merged" }
-        sync.applyRemote = { _, _ in XCTFail("Repeated merge would duplicate content") }
+        client.memo = FlomoMemo(id: "test", content: "Shared\nRemote", updatedAt: "v2")
+        var local = "Shared\nLocal"
+        sync.readLocal = { local }
+        sync.applyRemote = { expected, replacement in XCTAssertEqual(expected, local); local = replacement }
         sync.start(client: client)
         await sync.synchronize()
         await sync.synchronize(choice: .merge, reviewed: try XCTUnwrap(sync.conflict))
+        XCTAssertEqual(local.components(separatedBy: "Shared").count - 1, 1)
+        XCTAssertTrue(local.contains("Local")); XCTAssertTrue(local.contains("Remote"))
+        XCTAssertEqual(sync.phase, .waiting)
+        XCTAssertEqual(client.updates, 0)
+        XCTAssertNil(sync.record.pendingWrite)
+        let backups = try FileManager.default.contentsOfDirectory(at: url.deletingLastPathComponent().appendingPathComponent("Sync Backups"), includingPropertiesForKeys: nil)
+        XCTAssertTrue(try backups.contains { try String(contentsOf: $0) == "An older upload" })
+        await sync.synchronize()
+        XCTAssertEqual(client.updates, 1)
+        XCTAssertEqual(SyncDocument.fromFlomo(client.memo.content), local)
+        XCTAssertEqual(sync.phase, .synced)
+        sync.pause()
+    }
+
+    func testEditedMergeIsAppliedExactlyAndRechecksBothReviewedVersions() async throws {
+        let (sync, _) = try make(SyncRecord(enabled: true, memoID: "test", pendingWrite: "Older upload"))
+        let client = FakeFlomo()
+        client.memo = FlomoMemo(id: "test", content: "Shared\nRemote", updatedAt: "v2")
+        var local = "Shared\nLocal"
+        sync.readLocal = { local }
+        var applications = 0
+        sync.applyRemote = { expected, replacement in XCTAssertEqual(expected, local); local = replacement; applications += 1 }
+        sync.start(client: client)
+        await sync.prepareReview()
+        let stale = try XCTUnwrap(sync.conflict)
+        client.memo = FlomoMemo(id: "test", content: "New remote edit", updatedAt: "v3")
+        await sync.synchronize(choice: .merge, reviewed: stale, mergedText: "User reviewed draft")
+        XCTAssertEqual(applications, 0)
+        XCTAssertEqual(client.updates, 0)
+        XCTAssertEqual(sync.record.pendingWrite, "Older upload")
+        let current = try XCTUnwrap(sync.conflict)
+        let draft = "User reviewed draft\n\n\n- Item one\n\n- Item two  \n"
+        await sync.synchronize(choice: .merge, reviewed: current, mergedText: draft)
+        XCTAssertEqual(local, draft, "Save exactly the draft the user confirmed, including spacing")
+        XCTAssertEqual(applications, 1)
+        XCTAssertNil(sync.record.pendingWrite)
+        XCTAssertNil(sync.record.pendingRemoteVersion)
+        await sync.synchronize()
+        XCTAssertEqual(client.memo.content, SyncDocument.toFlomo(draft))
+        XCTAssertEqual(local, draft)
+        XCTAssertEqual(client.updates, 1)
+        sync.pause()
+    }
+
+    func testInterruptedBeforeLocalApplyKeepsAndRecoversTheConfirmedDraft() async throws {
+        let (sync, url) = try make(SyncRecord(enabled: true, memoID: "test", baseline: "Local", remoteBaseline: "Remote"))
+        let client = FakeFlomo()
+        client.memo = FlomoMemo(id: "test", content: "Remote", updatedAt: "v2")
+        var local = "Local"
+        let draft = "Confirmed draft\n\n\n- Kept spacing\n"
+        sync.readLocal = { local }
+        sync.applyRemote = { _, _ in throw SyncFailure.localUnavailable }
+        sync.start(client: client)
+        await sync.prepareReview()
+        await sync.synchronize(choice: .merge, reviewed: try XCTUnwrap(sync.conflict), mergedText: draft)
+        XCTAssertEqual(local, "Local")
+        XCTAssertEqual(try FlomoSync(stateURL: url).record.pendingMerge?.merged, draft)
+        sync.stop()
+
+        let recovered = try FlomoSync(stateURL: url)
+        recovered.readLocal = { local }
+        recovered.applyRemote = { expected, replacement in XCTAssertEqual(expected, local); local = replacement }
+        recovered.start(client: client)
+        await recovered.synchronize()
+        XCTAssertEqual(local, draft)
+        XCTAssertNil(recovered.record.pendingMerge)
+        XCTAssertEqual(recovered.phase, .waiting, "Different copies must not be reported as synced before upload")
+        XCTAssertEqual(client.updates, 0)
+        await recovered.synchronize()
+        XCTAssertEqual(client.updates, 1)
+        XCTAssertEqual(recovered.phase, .synced)
+        XCTAssertEqual(local, draft)
+        recovered.pause()
+    }
+
+    func testInterruptedDraftIsPreservedWhenTheRemoteVersionChanged() async throws {
+        let pending = PendingMerge(localBefore: "Local", merged: "Reviewed draft", remoteBefore: "Remote", remoteVersion: "v2")
+        let (sync, url) = try make(SyncRecord(enabled: true, memoID: "test", baseline: "Local", remoteBaseline: "Changed remote", pendingMerge: pending))
+        let client = FakeFlomo()
+        client.memo = FlomoMemo(id: "test", content: "Changed remote", updatedAt: "v3")
+        sync.readLocal = { "Local" }
+        sync.applyRemote = { _, _ in XCTFail("Changed remote cannot receive the old reviewed draft automatically") }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(sync.record.pendingMerge, pending)
+        XCTAssertEqual(try FlomoSync(stateURL: url).record.pendingMerge, pending)
         XCTAssertEqual(sync.phase, .verifyWrite)
         XCTAssertEqual(client.updates, 0)
+        XCTAssertNotNil(sync.conflict)
+        sync.pause()
+    }
+
+    func testMergeConfirmationWaitsForAnInFlightBackgroundRead() async throws {
+        let (sync, _) = try make()
+        let client = FakeFlomo()
+        client.memo = FlomoMemo(id: "test", content: "Remote", updatedAt: "v2")
+        var local = "Local"
+        sync.readLocal = { local }
+        sync.applyRemote = { expected, replacement in XCTAssertEqual(expected, local); local = replacement }
+        sync.start(client: client)
+        await sync.synchronize()
+        let reviewed = try XCTUnwrap(sync.conflict)
+        let fetching = expectation(description: "Background read in flight")
+        var releaseFetch: CheckedContinuation<Void, Never>?
+        client.beforeFetch = {
+            await withCheckedContinuation { releaseFetch = $0; fetching.fulfill() }
+        }
+        let background = Task { await sync.prepareReview() }
+        await fulfillment(of: [fetching], timeout: 2)
+        client.beforeFetch = nil
+        let confirmation = Task { await sync.synchronize(choice: .merge, reviewed: reviewed, mergedText: "Confirmed result") }
+        try await Task.sleep(for: .milliseconds(60))
+        XCTAssertEqual(local, "Local")
+        releaseFetch?.resume()
+        await background.value
+        await confirmation.value
+        XCTAssertEqual(local, "Confirmed result")
+        XCTAssertEqual(sync.phase, .waiting)
+        XCTAssertEqual(client.updates, 0)
+        sync.pause()
+    }
+
+    func testReviewedMergeCanRepairUnsupportedSourceInTheEditableDraft() async throws {
+        let (sync, _) = try make()
+        let client = FakeFlomo()
+        var local = "- [ ] A task"
+        sync.readLocal = { local }
+        sync.applyRemote = { expected, replacement in XCTAssertEqual(expected, local); local = replacement }
+        sync.start(client: client)
+        await sync.prepareReview()
+        let conflict = try XCTUnwrap(sync.conflict)
+        await sync.synchronize(choice: .merge, reviewed: conflict, mergedText: "- A task\nBase")
+        XCTAssertEqual(local, "- A task\nBase")
+        await sync.synchronize()
+        XCTAssertEqual(client.updates, 1)
         sync.pause()
     }
 

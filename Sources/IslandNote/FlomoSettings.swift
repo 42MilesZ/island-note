@@ -14,6 +14,7 @@ enum FlomoSettings {
             if let action = await review.run() {
                 switch action {
                 case .choose(let choice): await sync.synchronize(choice: choice, reviewed: conflict)
+                case .merge(let text): await sync.synchronize(choice: .merge, reviewed: conflict, mergedText: text)
                 case .resume: sync.resume()
                 }
                 // Preserve a rejected operation's reason on the comparison.

@@ -6,10 +6,10 @@ import XCTest
 final class FlomoConflictWindowTests: XCTestCase {
     private let paragraph = "A paragraph 中文正文 with text that wraps on narrow viewports.\n\n"
 
-    private func review(conflict: SyncConflict, phase: SyncPhase, lastVerifiedAt: Date?, canChoose: Bool, canMerge: Bool,
-                        reviewError: String? = nil, mergeUnavailableReason: String? = nil) -> FlomoConflictWindowController {
+    private func review(conflict: SyncConflict, phase: SyncPhase, lastVerifiedAt: Date?, canChoose: Bool,
+                        reviewError: String? = nil) -> FlomoConflictWindowController {
         FlomoConflictWindowController(conflict: conflict, phase: phase, lastVerifiedAt: lastVerifiedAt,
-            canChoose: canChoose, canMerge: canMerge, reviewError: reviewError, mergeUnavailableReason: mergeUnavailableReason,
+            canChoose: canChoose, reviewError: reviewError,
             preparedComparison: SyncDiff.compare(left: conflict.local, right: SyncDocument.fromFlomo(conflict.remote.content)))
     }
 
@@ -18,7 +18,7 @@ final class FlomoConflictWindowTests: XCTestCase {
         let controller = review(conflict: SyncConflict(
             local: local ?? String(repeating: paragraph, count: 400),
             remote: FlomoMemo(id: "fixture", content: remote ?? String(repeating: paragraph, count: 170), updatedAt: "")),
-            phase: .conflict, lastVerifiedAt: nil, canChoose: true, canMerge: true)
+            phase: .conflict, lastVerifiedAt: nil, canChoose: true)
         controller.prepareTextLayout()
         return controller
     }
@@ -32,8 +32,8 @@ final class FlomoConflictWindowTests: XCTestCase {
         controller.prepareTextLayout()
         for button in [controller.scrollLockButton!, controller.moreButton!] {
             XCTAssertFalse(button.isHiddenOrHasHiddenAncestor)
-            XCTAssertEqual(button.frame.width, 36, accuracy: 0.1)
-            XCTAssertEqual(button.frame.height, 36, accuracy: 0.1)
+            XCTAssertEqual(button.frame.width, 32, accuracy: 0.1)
+            XCTAssertEqual(button.frame.height, 32, accuracy: 0.1)
             XCTAssertTrue(root.bounds.contains(button.convert(button.bounds, to: root)))
         }
         window.displayIfNeeded()
@@ -214,7 +214,7 @@ final class FlomoConflictWindowTests: XCTestCase {
         let text = String(repeating: "A long paragraph 中文正文, with readable spacing.\n\n", count: 500)
         let controller = review(conflict: SyncConflict(local: text,
             remote: FlomoMemo(id: "test", content: text, updatedAt: "2026-10-14T18:00:00+08:00")),
-            phase: .conflict, lastVerifiedAt: nil, canChoose: true, canMerge: false)
+            phase: .conflict, lastVerifiedAt: nil, canChoose: true)
         let window = try XCTUnwrap(controller.window)
         defer { window.close() }
         controller.prepareTextLayout()
@@ -256,7 +256,7 @@ final class FlomoConflictWindowTests: XCTestCase {
             L10n.language = language
             let controller = review(conflict: SyncConflict(local: "Local",
                 remote: FlomoMemo(id: "test", content: "Remote", updatedAt: "")),
-                phase: .conflict, lastVerifiedAt: nil, canChoose: false, canMerge: false)
+                phase: .conflict, lastVerifiedAt: nil, canChoose: false)
             defer { controller.window?.close() }
             controller.window?.setContentSize(NSSize(width: 720, height: 500))
             controller.prepareTextLayout()
@@ -265,7 +265,7 @@ final class FlomoConflictWindowTests: XCTestCase {
             let resume = try XCTUnwrap(controller.resumeButton)
             XCTAssertTrue(resume.isEnabled)
             XCTAssertEqual(resume.title, L10n.tr("Resume Sync"))
-            XCTAssertFalse(controller.moreMenu.items[0].isEnabled)
+            XCTAssertFalse(controller.mergeButton.isEnabled)
             let root = try XCTUnwrap(controller.window?.contentView)
             func fields(_ view: NSView) -> [NSTextField] {
                 (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap(fields)
@@ -288,7 +288,7 @@ final class FlomoConflictWindowTests: XCTestCase {
                     let controller = review(conflict: SyncConflict(local: String(repeating: paragraph, count: 60),
                         remote: FlomoMemo(id: "fixture", content: String(repeating: paragraph, count: 40), updatedAt: "2026-10-15T08:15:27+08:00"),
                         localUpdatedAt: date, capturedAt: date.addingTimeInterval(600)),
-                        phase: .conflict, lastVerifiedAt: date.addingTimeInterval(-600), canChoose: true, canMerge: true)
+                        phase: .conflict, lastVerifiedAt: date.addingTimeInterval(-600), canChoose: true)
                     let window = try XCTUnwrap(controller.window)
                     defer { window.close() }
                     window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
@@ -304,8 +304,8 @@ final class FlomoConflictWindowTests: XCTestCase {
                     XCTAssertEqual(controller.remoteButton.title, L10n.tr("Use Flomo"))
                     XCTAssertNil(controller.resumeButton)
                     XCTAssertEqual(controller.moreButton.frame.size, controller.scrollLockButton.frame.size)
-                    XCTAssertEqual(controller.moreButton.frame.height, 36, accuracy: 0.1)
-                    XCTAssertEqual(views.filter { $0 is NSButton }.count, 6, "Two choices, difference navigation, lock and more")
+                    XCTAssertEqual(controller.moreButton.frame.height, 32, accuracy: 0.1)
+                    XCTAssertEqual(views.filter { $0 is NSButton }.count, 7, "Two choices, merge, difference navigation, lock and more")
                     let metadata = views.filter { $0.accessibilityIdentifier() == "syncReview.metadata" }
                     XCTAssertEqual(metadata.count, 6)
                     for tag in metadata {
@@ -320,18 +320,19 @@ final class FlomoConflictWindowTests: XCTestCase {
                     XCTAssertTrue(metadata.contains { $0.toolTip?.contains(FlomoConflictWindowController.dateText(date)) == true })
                     XCTAssertFalse(views.contains { $0.accessibilityIdentifier() == "syncReview.warning" })
                     let fields = views.compactMap { $0 as? NSTextField }.map(\.stringValue)
-                    XCTAssertTrue(fields.contains(L10n.tr("Choose one copy for both")))
+                    XCTAssertTrue(fields.contains(L10n.tr("Compare and merge")))
                     XCTAssertFalse(fields.contains("Updates Flomo"))
                     XCTAssertFalse(fields.contains("Updates Island Note"))
-                    XCTAssertTrue(controller.moreMenu.items[0].isEnabled)
-                    XCTAssertEqual(controller.moreMenu.items[0].title, L10n.tr("Append Both Full Copies"))
+                    XCTAssertTrue(controller.mergeButton.isEnabled)
+                    XCTAssertEqual(controller.mergeButton.title, L10n.tr("Merge…"))
+                    XCTAssertLessThanOrEqual(root.bounds.maxY - controller.localScroll.convert(controller.localScroll.bounds, to: root).maxY, 190, "Compact header should leave more space for content")
                     try render(controller, name: "\(language.rawValue)-\(dark ? "dark" : "light")-\(Int(size.width))")
                 }
             }
         }
     }
 
-    func testRefreshFailureAndUnconfirmedUploadRemainVisible() throws {
+    func testRefreshFailureRemainsVisibleAndUnconfirmedUploadCanMerge() throws {
         _ = NSApplication.shared
         let original = L10n.language
         defer { L10n.language = original }
@@ -340,15 +341,16 @@ final class FlomoConflictWindowTests: XCTestCase {
             for phase in [SyncPhase.offline, .verifyWrite] {
                 let error = phase == .offline ? "Could not refresh the remote copy. Please try again when your connection is available." : nil
                 let controller = review(conflict: SyncConflict(local: "Local", remote: FlomoMemo(id: "fixture", content: "Remote", updatedAt: "")),
-                    phase: phase, lastVerifiedAt: nil, canChoose: true, canMerge: false, reviewError: error)
+                    phase: phase, lastVerifiedAt: nil, canChoose: true, reviewError: error)
                 defer { controller.window?.close() }
                 controller.window?.setContentSize(NSSize(width: 720, height: 500)); controller.prepareTextLayout()
                 let root = try XCTUnwrap(controller.window?.contentView)
-                let warning = try XCTUnwrap(descendants(root).first { $0.accessibilityIdentifier() == "syncReview.warning" } as? NSTextField)
-                XCTAssertEqual(warning.stringValue, error ?? (L10n.tr("Append unavailable: ") + L10n.tr("A previous change is awaiting verification.")))
-                XCTAssertTrue(root.bounds.contains(warning.convert(warning.bounds, to: root)))
-                XCTAssertFalse(controller.moreMenu.items[0].isEnabled)
-                XCTAssertGreaterThanOrEqual(controller.localScroll.bounds.height, 80)
+                let warning = descendants(root).first { $0.accessibilityIdentifier() == "syncReview.warning" } as? NSTextField
+                if let error {
+                    XCTAssertEqual(warning?.stringValue, error)
+                    XCTAssertTrue(root.bounds.contains(try XCTUnwrap(warning).convert(warning!.bounds, to: root)))
+                } else { XCTAssertNil(warning, "An unconfirmed upload no longer prevents a reviewed deduplicated merge") }
+                XCTAssertTrue(controller.mergeButton.isEnabled)
                 try render(controller, name: "\(language.rawValue)-\(phase == .offline ? "offline" : "unconfirmed")")
             }
         }
@@ -373,9 +375,18 @@ final class FlomoConflictWindowTests: XCTestCase {
             XCTAssertFalse(controller.window?.isVisible ?? true)
         }
         let controller = review(conflict: SyncConflict(local: "Local", remote: FlomoMemo(id: "fixture", content: "Remote", updatedAt: "")),
-            phase: .mergeRequired, lastVerifiedAt: nil, canChoose: true, canMerge: true)
-        Task { @MainActor in controller.moreMenu.performActionForItem(at: 0) }
-        guard case .choose(.merge) = await controller.run() else { return XCTFail("Combine must retain the merge action") }
+            phase: .mergeRequired, lastVerifiedAt: nil, canChoose: true)
+        Task { @MainActor in
+            controller.mergeButton.performClick(nil)
+            let deadline = Date().addingTimeInterval(5)
+            while controller.mergePreview == nil, Date() < deadline { try? await Task.sleep(for: .milliseconds(10)) }
+            guard let preview = controller.mergePreview else { controller.window?.close(); return XCTFail("Merge should open an editable preview") }
+            preview.textView.string = "Reviewed and edited result"
+            preview.textDidChange(Notification(name: NSText.didChangeNotification))
+            preview.applyButton.performClick(nil)
+        }
+        guard case .merge(let text) = await controller.run() else { return XCTFail("Merge must return the reviewed draft") }
+        XCTAssertEqual(text, "Reviewed and edited result")
     }
 
     func testEscapeCancelsFromFocusedTextAndPausedReviewCanResume() async throws {
@@ -393,7 +404,7 @@ final class FlomoConflictWindowTests: XCTestCase {
         let cancelled = await controller.run()
         XCTAssertNil(cancelled)
         let paused = review(conflict: SyncConflict(local: "Local", remote: FlomoMemo(id: "fixture", content: "Remote", updatedAt: "")),
-            phase: .conflict, lastVerifiedAt: nil, canChoose: false, canMerge: false)
+            phase: .conflict, lastVerifiedAt: nil, canChoose: false)
         Task { @MainActor in paused.resumeButton?.performClick(nil) }
         guard case .resume = await paused.run() else { return XCTFail("Resume must remain available when paused") }
     }
