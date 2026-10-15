@@ -324,8 +324,8 @@
 "Append unavailable: " = "Append unavailable: ";
 "Collapse unchanged text" = "Collapse unchanged text";
 "Preparing comparison…" = "Preparing comparison…";
-"− Only Island Note" = "− Only Island Note";
-"+ Only Flomo" = "+ Only Flomo";
+"Highlighted text differs between copies" = "Highlighted text differs between copies";
+"No corresponding paragraph in this copy" = "No corresponding paragraph in this copy";
 "Previous difference" = "Previous difference";
 "Next difference" = "Next difference";
 "No differences" = "No differences";

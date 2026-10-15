@@ -160,6 +160,40 @@ final class SyncDiffPresentationTests: XCTestCase {
         }
     }
 
+    func testPeerComparisonUsesTheSameHighlightAndOnlyMarksActualDifferences() throws {
+        let review = controller(left: "abc\n", right: "abXc\n")
+        defer { review.window?.close() }
+        let left = try XCTUnwrap(review.localScroll.documentView as? SyncDiffTextView)
+        let right = try XCTUnwrap(review.remoteScroll.documentView as? SyncDiffTextView)
+        XCTAssertNil(left.textStorage?.attribute(.backgroundColor, at: 0, effectiveRange: nil))
+        XCTAssertNil(right.textStorage?.attribute(.backgroundColor, at: 0, effectiveRange: nil))
+        let highlight = try XCTUnwrap(right.textStorage?.attribute(.backgroundColor, at: 2, effectiveRange: nil) as? NSColor)
+        let reversed = controller(left: "abXc\n", right: "abc\n")
+        defer { reversed.window?.close() }
+        let reversedLeft = try XCTUnwrap(reversed.localScroll.documentView as? SyncDiffTextView)
+        XCTAssertEqual(reversedLeft.textStorage?.attribute(.backgroundColor, at: 2, effectiveRange: nil) as? NSColor, highlight)
+    }
+
+    func testMissingParagraphLabelsAreSymmetricAndNeverBecomeSourceText() throws {
+        let common = "共同内容\n"
+        let full = common + "只在这一份有的段落\n" + common
+        for (left, right, missingSide) in [(full, common + common, 1), (common + common, full, 0)] {
+            let review = controller(left: left, right: right)
+            defer { review.window?.close() }
+            try assertAligned(review)
+            for (index, scroll) in [review.localScroll!, review.remoteScroll!].enumerated() {
+                let view = try XCTUnwrap(scroll.documentView as? SyncDiffTextView)
+                XCTAssertEqual(view.decorations.contains(where: \.missing), index == missingSide)
+                XCTAssertFalse(view.string.contains(L10n.tr("No corresponding paragraph in this copy")))
+                XCTAssertEqual(view.side.originalText(in: NSRange(location: 0, length: view.string.utf16.count)), index == 0 ? left : right)
+                for (offset, unit) in view.string.utf16.enumerated() where unit == 10 {
+                    XCTAssertNil(view.textStorage?.attribute(.backgroundColor, at: offset, effectiveRange: nil),
+                                 "Paragraph spacing and alignment gaps must not inherit a character highlight")
+                }
+            }
+        }
+    }
+
     func testDenseDifferencesBuildContiguousDisplayRangesAndPreserveUnicode() {
         let left = (0..<2_000).map { "共同 \($0) 👨‍👩‍👧‍👦\n左侧\n" }.joined()
         let right = (0..<2_000).map { "共同 \($0) 👨‍👩‍👧‍👦\n右侧\n" }.joined()
@@ -238,6 +272,33 @@ final class SyncDiffPresentationTests: XCTestCase {
             let bitmap = try XCTUnwrap(root.bitmapImageRepForCachingDisplay(in: root.bounds))
             root.cacheDisplay(in: root.bounds, to: bitmap)
             try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: directory).appendingPathComponent("diff-\(language.rawValue)-blocked.png"))
+        }
+    }
+
+    func testRenderedMissingParagraphsInBothDirectionsAndLanguages() throws {
+        guard let directory = ProcessInfo.processInfo.environment["ISLAND_NOTE_RENDER_DIR"] else { return }
+        let original = L10n.language
+        defer { L10n.language = original }
+        let common = "两份共有的内容，保持普通正文。\n"
+        let full = common + "这段只存在于其中一份。这里是在比较当前的两份内容，尚未决定保留哪一份。\n" + common
+        for language in [AppLanguage.chinese, .english] {
+            L10n.language = language
+            for dark in [false, true] {
+                for missingLeft in [false, true] {
+                    let review = controller(left: missingLeft ? common + common : full, right: missingLeft ? full : common + common)
+                    defer { review.window?.close() }
+                    review.window?.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                    review.window?.setContentSize(NSSize(width: 720, height: 500))
+                    review.showWindow(nil); review.prepareTextLayout()
+                    try assertAligned(review)
+                    let root = try XCTUnwrap(review.window?.contentView)
+                    review.window?.displayIfNeeded()
+                    let bitmap = try XCTUnwrap(root.bitmapImageRepForCachingDisplay(in: root.bounds))
+                    root.cacheDisplay(in: root.bounds, to: bitmap)
+                    let name = "peer-\(language.rawValue)-\(dark ? "dark" : "light")-missing-\(missingLeft ? "left" : "right").png"
+                    try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: directory).appendingPathComponent(name))
+                }
+            }
         }
     }
 }

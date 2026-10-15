@@ -324,8 +324,8 @@
 "Append unavailable: " = "暂不能拼接：";
 "Collapse unchanged text" = "折叠相同内容";
 "Preparing comparison…" = "正在对比…";
-"− Only Island Note" = "− 仅 Island Note 有";
-"+ Only Flomo" = "+ 仅 Flomo 有";
+"Highlighted text differs between copies" = "高亮处为两份内容的差异";
+"No corresponding paragraph in this copy" = "此版本无对应段落";
 "Previous difference" = "上一处差异";
 "Next difference" = "下一处差异";
 "No differences" = "内容相同";

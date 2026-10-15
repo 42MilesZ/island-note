@@ -106,24 +106,19 @@ struct SyncDiffPresentation {
 }
 
 enum SyncDiffPalette {
-    static let removed = NSColor(name: nil) { appearance in
+    // Both copies are peers: this color means different, without a direction.
+    static let difference = NSColor(name: nil) { appearance in
         appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            ? NSColor(srgbRed: 1, green: 0.48, blue: 0.48, alpha: 1)
-            : NSColor(srgbRed: 0.72, green: 0.17, blue: 0.20, alpha: 1)
-    }
-    static let added = NSColor(name: nil) { appearance in
-        appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
-            ? NSColor(srgbRed: 0.38, green: 0.82, blue: 0.57, alpha: 1)
-            : NSColor(srgbRed: 0.13, green: 0.47, blue: 0.28, alpha: 1)
+            ? NSColor(srgbRed: 0.96, green: 0.79, blue: 0.36, alpha: 1)
+            : NSColor(srgbRed: 0.68, green: 0.49, blue: 0.09, alpha: 1)
     }
 }
 
 @MainActor
 final class SyncDiffTextView: NSTextView {
-    struct Decoration { let top: CGFloat; let height: CGFloat; let changed: Bool }
+    struct Decoration { let top: CGFloat; let height: CGFloat; let changed: Bool; let missing: Bool }
     var side = SyncDiffPresentation.Side(original: "")
     var decorations: [Decoration] = []
-    var isLeft = true
     var leadingGap: CGFloat = 0
     private var fixedHeight: CGFloat?
     override var textContainerOrigin: NSPoint {
@@ -137,14 +132,29 @@ final class SyncDiffTextView: NSTextView {
         let style = NSMutableParagraphStyle(); style.lineSpacing = 5
         return style
     }
-    func present(_ side: SyncDiffPresentation.Side, folded: [NSRange], isLeft: Bool) {
-        self.side = side; self.isLeft = isLeft; leadingGap = 0; fixedHeight = nil
+    func present(_ side: SyncDiffPresentation.Side, folded: [NSRange]) {
+        self.side = side; leadingGap = 0; fixedHeight = nil
         let attributed = NSMutableAttributedString(string: side.text, attributes: [
             .font: NSFont.systemFont(ofSize: 14), .foregroundColor: SettingsPalette.ink,
             .paragraphStyle: Self.paragraph
         ])
-        let color = isLeft ? SyncDiffPalette.removed : SyncDiffPalette.added
-        for range in side.highlights { attributed.addAttribute(.backgroundColor, value: color.withAlphaComponent(0.18), range: range) }
+        let displayed = side.text as NSString
+        let highlight = SyncDiffPalette.difference.withAlphaComponent(0.22)
+        for range in side.highlights {
+            // TextKit paints a highlighted paragraph separator through its
+            // paragraph spacing. Keep alignment-only gaps free of highlighting.
+            var start = range.location
+            for offset in range.location..<NSMaxRange(range) {
+                let unit = displayed.character(at: offset)
+                if unit == 10 || unit == 13 || unit == 0x2028 || unit == 0x2029 {
+                    if offset > start { attributed.addAttribute(.backgroundColor, value: highlight, range: NSRange(location: start, length: offset - start)) }
+                    start = offset + 1
+                }
+            }
+            if start < NSMaxRange(range) {
+                attributed.addAttribute(.backgroundColor, value: highlight, range: NSRange(location: start, length: NSMaxRange(range) - start))
+            }
+        }
         for range in folded { attributed.addAttributes([.foregroundColor: SettingsPalette.secondary, .font: NSFont.systemFont(ofSize: 13)], range: range) }
         textStorage?.setAttributedString(attributed)
         setAccessibilityValue(side.original)
@@ -197,7 +207,6 @@ final class SyncDiffTextView: NSTextView {
         return pasteboard.setString(pieces.joined(separator: "\n"), forType: .string)
     }
     override func draw(_ dirtyRect: NSRect) {
-        let color = isLeft ? SyncDiffPalette.removed : SyncDiffPalette.added
         // Binary search to draw only decorations intersecting the viewport.
         var low = 0, high = decorations.count
         while low < high {
@@ -206,12 +215,17 @@ final class SyncDiffTextView: NSTextView {
         }
         for decoration in decorations.dropFirst(low) {
             if decoration.top > dirtyRect.maxY { break }
-            guard decoration.changed else { continue }
-            color.withAlphaComponent(0.065).setFill()
-            NSRect(x: 0, y: decoration.top, width: bounds.width, height: decoration.height).fill()
-            (isLeft ? "−" : "+").draw(at: NSPoint(x: 6, y: decoration.top + 1), withAttributes: [
-                .font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: color
-            ])
+            if decoration.changed {
+                SyncDiffPalette.difference.withAlphaComponent(0.65).setFill()
+                NSBezierPath(roundedRect: NSRect(x: 9, y: decoration.top + 2, width: 2,
+                                                height: max(2, decoration.height - 4)), xRadius: 1, yRadius: 1).fill()
+            }
+            if decoration.missing {
+                (L10n.tr("No corresponding paragraph in this copy") as NSString).draw(
+                    at: NSPoint(x: textContainerOrigin.x, y: decoration.top + 1), withAttributes: [
+                        .font: NSFont.systemFont(ofSize: 13), .foregroundColor: SettingsPalette.secondary
+                    ])
+            }
         }
         super.draw(dirtyRect)
     }

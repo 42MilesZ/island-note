@@ -115,7 +115,7 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
         for (view, side, isLeft) in [(localScroll.documentView as! SyncDiffTextView, presentation.left, true),
                                      (remoteScroll.documentView as! SyncDiffTextView, presentation.right, false)] {
             let folded = presentation.blocks.filter(\.folded).map { isLeft ? $0.left : $0.right }
-            view.present(side, folded: folded, isLeft: isLeft)
+            view.present(side, folded: folded)
         }
         differenceIndices = presentation.blocks.indices.filter { presentation.blocks[$0].changed }
         layoutWidths = []; alignedBlocks = []
@@ -154,7 +154,8 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
                 view.decorations = blocks.enumerated().map { blockIndex, geometry in
                     let block = presentation.blocks[blockIndex]
                     return SyncDiffTextView.Decoration(top: geometry.top, height: geometry.height,
-                                                       changed: index == 0 ? block.leftChanged : block.rightChanged)
+                                                       changed: index == 0 ? block.leftChanged : block.rightChanged,
+                                                       missing: block.changed && (index == 0 ? block.left : block.right).length == 0)
                 }
             }
             layoutWidths = widths; layoutPassCount += 1
@@ -348,17 +349,15 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
 
         let toolbar = NSStackView()
         toolbar.orientation = .horizontal; toolbar.alignment = .centerY; toolbar.spacing = 8
-        let leftLegend = label("− Only Island Note", size: 13)
-        leftLegend.textColor = SyncDiffPalette.removed
-        let rightLegend = label("+ Only Flomo", size: 13)
-        rightLegend.textColor = SyncDiffPalette.added
+        let legend = label("Highlighted text differs between copies", size: 13, secondary: true)
+        legend.setAccessibilityIdentifier("syncReview.legend")
         differenceLabel = label("Preparing comparison…", size: 13, secondary: true)
         differenceLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
         differenceLabel.setAccessibilityIdentifier("syncReview.differencePosition")
         differenceLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         previousDifferenceButton = navigationButton(symbol: "chevron.up", title: "Previous difference", action: #selector(previousDifference))
         nextDifferenceButton = navigationButton(symbol: "chevron.down", title: "Next difference", action: #selector(nextDifference))
-        for view in [leftLegend, rightLegend, NSView(), differenceLabel!, previousDifferenceButton!, nextDifferenceButton!] {
+        for view in [legend, NSView(), differenceLabel!, previousDifferenceButton!, nextDifferenceButton!] {
             toolbar.addArrangedSubview(view)
         }
 
