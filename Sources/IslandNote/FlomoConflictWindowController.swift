@@ -12,7 +12,9 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
     private(set) var remoteScroll: NSScrollView!
     private(set) var localButton: SettingsButton!
     private(set) var remoteButton: SettingsButton!
-    private(set) var mergeButton: SettingsButton!
+    private(set) var resumeButton: SettingsButton?
+    private(set) var moreButton: SettingsButton!
+    private(set) var moreMenu = NSMenu()
     private(set) var scrollLockButton: SettingsButton!
     private(set) var isScrollLocked = true
     private var synchronizingScroll = false
@@ -93,7 +95,7 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
         window.contentView = root
         let header = NSStackView()
         header.orientation = .vertical; header.alignment = .leading; header.spacing = 10
-        let title = label("Choose the copy to keep", size: 26)
+        let title = label("Choose one copy for both", size: 26)
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         scrollLockButton = SettingsButton(title: "", target: self, action: #selector(toggleScrollLock))
         scrollLockButton.setButtonType(.pushOnPushOff)
@@ -104,32 +106,60 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
         scrollLockButton.setAccessibilityLabel(L10n.tr("Synchronized scrolling"))
         scrollLockButton.setAccessibilityRole(.checkBox)
         updateScrollLockAppearance(animated: false)
-        let titleRow = NSStackView(views: [title, NSView(), scrollLockButton])
+        moreButton = SettingsButton(title: "", target: self, action: #selector(showMore))
+        moreButton.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: nil)
+        moreButton.imagePosition = .imageOnly
+        moreButton.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        moreButton.setAccessibilityIdentifier("syncReview.more")
+        moreButton.setAccessibilityLabel(L10n.tr("More options"))
+        moreButton.toolTip = L10n.tr("More options")
+        moreMenu.autoenablesItems = false
+        let combine = NSMenuItem(title: L10n.tr("Combine Both Copies"), action: #selector(merge), keyEquivalent: "")
+        combine.target = self; combine.isEnabled = canChoose && canMerge
+        combine.toolTip = L10n.tr("Append Flomo after Island Note in the same memo. Both originals are backed up.")
+        moreMenu.addItem(combine)
+        moreMenu.addItem(.separator())
+        let later = NSMenuItem(title: L10n.tr("Decide Later"), action: #selector(cancel), keyEquivalent: "")
+        later.target = self; moreMenu.addItem(later)
+        let controls = NSStackView(views: [scrollLockButton, moreButton])
+        controls.spacing = 8
+        let titleRow = NSStackView(views: [title, NSView(), controls])
         titleRow.orientation = .horizontal; titleRow.alignment = .centerY; titleRow.spacing = 16
         header.addArrangedSubview(titleRow)
         titleRow.widthAnchor.constraint(equalTo: header.widthAnchor).isActive = true
-        let explanation: String
+        let timeRow = NSStackView(views: [
+            SyncReviewMetadataTag(symbol: "arrow.triangle.2.circlepath", key: "Last sync",
+                                  value: lastVerifiedAt.map { Self.dateText($0, compact: true) } ?? L10n.tr("No verified sync"),
+                                  detail: lastVerifiedAt.map(Self.dateText)),
+            SyncReviewMetadataTag(symbol: "clock", key: "Compared",
+                                  value: Self.dateText(conflict.capturedAt, compact: true), detail: Self.dateText(conflict.capturedAt))
+        ])
+        timeRow.spacing = 10
+        header.addArrangedSubview(timeRow)
+        let warning: String?
         switch phase {
         case .connectionFailed, .offline, .authorizationRequired:
-            explanation = "Could not refresh. These are the last captured copies."
+            warning = L10n.tr("Could not refresh. These are the last captured copies.")
         case .verifyWrite, .formattingChanged:
-            explanation = "The last upload could not be confirmed. Compare both copies before continuing."
-        case .mergeRequired:
-            explanation = "These notes have different text. Choose one, or keep both in the same memo."
+            warning = L10n.tr("Last upload unconfirmed.")
         default:
-            explanation = "Both copies have changes. Your choice will be synced to both sides."
+            warning = nil
         }
-        header.addArrangedSubview(label(reviewError ?? L10n.tr(explanation), size: 14, secondary: true, wrapping: true, localized: false))
-        let verified = lastVerifiedAt.map { L10n.format("Last synced: %@", Self.dateText($0)) } ?? L10n.tr("No verified sync yet")
-        header.addArrangedSubview(label(verified + " · " + L10n.format("Compared: %@", Self.dateText(conflict.capturedAt)),
-                                       size: 13, secondary: true, wrapping: true, localized: false))
+        if let warning = reviewError ?? warning {
+            let field = label(warning, size: 13, secondary: true, wrapping: true, localized: false)
+            field.setAccessibilityIdentifier("syncReview.warning")
+            header.addArrangedSubview(field)
+            field.widthAnchor.constraint(equalTo: header.widthAnchor).isActive = true
+        }
 
         let columns = NSStackView()
         columns.orientation = .horizontal; columns.alignment = .top; columns.spacing = 20; columns.distribution = .fillEqually
-        let left = column(title: "Island Note", updated: conflict.localUpdatedAt.map(Self.dateText),
-                          text: conflict.local, action: #selector(useLocal), hint: "Updates Flomo", enabled: canChoose)
-        let right = column(title: "Flomo", updated: Self.remoteDateText(conflict.remote.updatedAt),
-                           text: SyncDocument.fromFlomo(conflict.remote.content), action: #selector(useRemote), hint: "Updates Island Note", enabled: canChoose)
+        let left = column(title: "Island Note", updated: conflict.localUpdatedAt.map { Self.dateText($0, compact: true) },
+                          fullDate: conflict.localUpdatedAt.map(Self.dateText), text: conflict.local,
+                          action: #selector(useLocal), buttonTitle: "Use Island Note", enabled: canChoose)
+        let right = column(title: "Flomo", updated: Self.remoteDateText(conflict.remote.updatedAt, compact: true),
+                           fullDate: Self.remoteDateText(conflict.remote.updatedAt), text: SyncDocument.fromFlomo(conflict.remote.content),
+                           action: #selector(useRemote), buttonTitle: "Use Flomo", enabled: canChoose)
         localScroll = left.scroll; localButton = left.button
         remoteScroll = right.scroll; remoteButton = right.button
         localButton.setAccessibilityIdentifier("syncReview.local")
@@ -140,60 +170,64 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
 
         let footer = NSStackView()
         footer.orientation = .horizontal; footer.alignment = .centerY; footer.spacing = 12
+        let shield = NSImageView(image: NSImage(systemSymbolName: "checkmark.shield", accessibilityDescription: nil)!)
+        shield.contentTintColor = SettingsPalette.secondary
+        shield.widthAnchor.constraint(equalToConstant: 14).isActive = true
+        shield.heightAnchor.constraint(equalToConstant: 14).isActive = true
+        footer.addArrangedSubview(shield)
         let preservation = label(canChoose ? "Originals are backed up before replacement." : "Sync is paused. Resume to apply a choice.",
                                  size: 13, secondary: true, wrapping: true)
         preservation.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         footer.addArrangedSubview(preservation)
-        mergeButton = SettingsButton(title: L10n.tr(canChoose ? "Keep Both" : "Resume Sync"), target: self,
-                                     action: canChoose ? #selector(merge) : #selector(resume))
-        mergeButton.isEnabled = !canChoose || canMerge
-        mergeButton.setAccessibilityIdentifier("syncReview.merge")
-        if canChoose { mergeButton.toolTip = L10n.tr("Append Flomo after Island Note in the same memo. Both originals are backed up.") }
-        footer.addArrangedSubview(mergeButton)
-        let later = SettingsButton(title: L10n.tr("Decide Later"), target: self, action: #selector(cancel), quiet: true)
-        later.keyEquivalent = "\u{1b}"
-        footer.addArrangedSubview(later)
+        footer.addArrangedSubview(NSView())
+        if !canChoose {
+            let resume = SettingsButton(title: L10n.tr("Resume Sync"), target: self, action: #selector(resume))
+            resume.setAccessibilityIdentifier("syncReview.resume")
+            resumeButton = resume; footer.addArrangedSubview(resume)
+        }
 
         for view in [header, columns, footer] { view.translatesAutoresizingMaskIntoConstraints = false; root.addSubview(view) }
         NSLayoutConstraint.activate([
             header.leadingAnchor.constraint(equalTo: root.leadingAnchor, constant: 28),
             header.trailingAnchor.constraint(equalTo: root.trailingAnchor, constant: -28),
             header.topAnchor.constraint(equalTo: root.topAnchor, constant: 22),
-            columns.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 24),
+            columns.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 20),
             columns.leadingAnchor.constraint(equalTo: header.leadingAnchor), columns.trailingAnchor.constraint(equalTo: header.trailingAnchor),
             columns.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -20),
             left.view.heightAnchor.constraint(equalTo: columns.heightAnchor), right.view.heightAnchor.constraint(equalTo: columns.heightAnchor),
             footer.leadingAnchor.constraint(equalTo: header.leadingAnchor), footer.trailingAnchor.constraint(equalTo: header.trailingAnchor),
             footer.bottomAnchor.constraint(equalTo: root.bottomAnchor, constant: -22)
         ])
-        window.initialFirstResponder = later
+        window.initialFirstResponder = localScroll.documentView
     }
 
-    private func column(title: String, updated: String?, text: String, action: Selector, hint: String, enabled: Bool)
+    private func column(title: String, updated: String?, fullDate: String?, text: String, action: Selector, buttonTitle: String, enabled: Bool)
         -> (view: NSView, scroll: NSScrollView, button: SettingsButton) {
         let card = SettingsSurface(role: .card)
         let heading = NSStackView()
-        heading.orientation = .vertical; heading.alignment = .leading; heading.spacing = 7
-        heading.addArrangedSubview(label(title, size: 18, localized: false))
-        let time = updated.map { L10n.format("Updated: %@", $0) } ?? L10n.tr("Update time unavailable")
-        heading.addArrangedSubview(label(time, size: 13, secondary: true, wrapping: true, localized: false))
-        heading.addArrangedSubview(label(L10n.format("%d characters", SyncDocument.count(text)), size: 13, secondary: true, localized: false))
+        heading.orientation = .vertical; heading.alignment = .leading; heading.spacing = 8
+        let count = SyncReviewMetadataTag(symbol: "text.alignleft", value: L10n.format("%d characters", SyncDocument.count(text)))
+        let name = NSStackView(views: [label(title, size: 18, localized: false), NSView(), count])
+        name.alignment = .centerY; name.spacing = 8
+        heading.addArrangedSubview(name)
+        name.widthAnchor.constraint(equalTo: heading.widthAnchor).isActive = true
+        let time = SyncReviewMetadataTag(symbol: "clock", key: updated == nil ? nil : "Updated",
+                                         value: updated ?? L10n.tr("Update time unavailable"), detail: fullDate)
+        heading.addArrangedSubview(time)
+        time.widthAnchor.constraint(lessThanOrEqualTo: heading.widthAnchor).isActive = true
         let scroll = Self.makeScrollView(text: text)
         scroll.setAccessibilityLabel(L10n.format("%@ copy", title))
-        let button = SettingsButton(title: L10n.tr("Use This Copy"), target: self, action: action)
+        let button = SettingsButton(title: L10n.tr(buttonTitle), target: self, action: action, emphasized: true)
         button.isEnabled = enabled
-        let effect = label(hint, size: 13, secondary: true)
-        effect.alignment = .center
-        for view in [heading, scroll, button, effect] { view.translatesAutoresizingMaskIntoConstraints = false; card.addSubview(view) }
+        for view in [heading, scroll, button] { view.translatesAutoresizingMaskIntoConstraints = false; card.addSubview(view) }
         NSLayoutConstraint.activate([
-            heading.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 20), heading.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -20),
-            heading.topAnchor.constraint(equalTo: card.topAnchor, constant: 20),
+            heading.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 18), heading.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -18),
+            heading.topAnchor.constraint(equalTo: card.topAnchor, constant: 18),
             scroll.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 4), scroll.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -4),
-            scroll.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 16), scroll.bottomAnchor.constraint(equalTo: button.topAnchor, constant: -16),
+            scroll.topAnchor.constraint(equalTo: heading.bottomAnchor, constant: 14), scroll.bottomAnchor.constraint(equalTo: button.topAnchor, constant: -14),
             scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 100),
             button.leadingAnchor.constraint(equalTo: heading.leadingAnchor), button.trailingAnchor.constraint(equalTo: heading.trailingAnchor),
-            effect.topAnchor.constraint(equalTo: button.bottomAnchor, constant: 8), effect.leadingAnchor.constraint(equalTo: heading.leadingAnchor),
-            effect.trailingAnchor.constraint(equalTo: heading.trailingAnchor), effect.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -18)
+            button.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -18)
         ])
         return (card, scroll, button)
     }
@@ -228,19 +262,21 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
         return field
     }
 
-    static func dateText(_ date: Date) -> String {
+    static func dateText(_ date: Date) -> String { dateText(date, compact: false) }
+
+    static func dateText(_ date: Date, compact: Bool) -> String {
         let formatter = DateFormatter()
         formatter.locale = L10n.language == .chinese ? Locale(identifier: "zh_CN") : .current
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        formatter.dateFormat = compact ? "yyyy-MM-dd HH:mm" : "yyyy-MM-dd HH:mm:ss"
         return formatter.string(from: date)
     }
 
-    static func remoteDateText(_ value: String) -> String? {
+    static func remoteDateText(_ value: String, compact: Bool = false) -> String? {
         guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         let formatter = ISO8601DateFormatter()
-        if let date = formatter.date(from: value) { return dateText(date) }
+        if let date = formatter.date(from: value) { return dateText(date, compact: compact) }
         formatter.formatOptions.insert(.withFractionalSeconds)
-        if let date = formatter.date(from: value) { return dateText(date) }
+        if let date = formatter.date(from: value) { return dateText(date, compact: compact) }
         // An offset-free service timestamp has no known timezone. Show its
         // original representation rather than inventing an absolute date.
         return value
@@ -319,6 +355,10 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
     @objc private func merge() { finish(.choose(.merge)) }
     @objc private func resume() { finish(.resume) }
     @objc private func cancel() { finish(nil) }
+    override func cancelOperation(_ sender: Any?) { finish(nil) }
+    @objc private func showMore() {
+        moreMenu.popUp(positioning: nil, at: NSPoint(x: 0, y: moreButton.bounds.minY), in: moreButton)
+    }
     func windowWillClose(_ notification: Notification) { finish(nil) }
     private func finish(_ choice: SyncReviewAction?) {
         guard let continuation else { return }
@@ -326,6 +366,48 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
         window?.close()
         continuation.resume(returning: choice)
     }
+}
+
+/// Read-only metadata stays smaller and quieter than the two selection buttons.
+private final class SyncReviewMetadataTag: NSStackView {
+    init(symbol: String, key: String? = nil, value: String, detail: String? = nil) {
+        super.init(frame: .zero)
+        orientation = .horizontal; alignment = .centerY; spacing = 6
+        edgeInsets = NSEdgeInsets(top: 5, left: 9, bottom: 5, right: 9)
+        wantsLayer = true; layer?.cornerRadius = 8; layer?.cornerCurve = .continuous
+        setHuggingPriority(.required, for: .horizontal)
+        let icon = NSImageView()
+        icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+        icon.contentTintColor = SettingsPalette.secondary
+        icon.setAccessibilityElement(false)
+        NSLayoutConstraint.activate([icon.widthAnchor.constraint(equalToConstant: 12), icon.heightAnchor.constraint(equalToConstant: 12)])
+        addArrangedSubview(icon)
+        if let key {
+            let field = NSTextField(labelWithString: L10n.tr(key))
+            field.font = .systemFont(ofSize: 13); field.textColor = SettingsPalette.secondary
+            field.setAccessibilityElement(false)
+            addArrangedSubview(field)
+        }
+        let field = NSTextField(labelWithString: value)
+        field.font = .monospacedDigitSystemFont(ofSize: 13, weight: .regular)
+        field.textColor = SettingsPalette.ink
+        field.lineBreakMode = .byTruncatingTail
+        field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        field.setAccessibilityElement(false)
+        addArrangedSubview(field)
+        translatesAutoresizingMaskIntoConstraints = false
+        heightAnchor.constraint(equalToConstant: 28).isActive = true
+        let full = [key.map { L10n.tr($0) }, detail ?? value].compactMap { $0 }.joined(separator: ": ")
+        toolTip = full
+        setAccessibilityIdentifier("syncReview.metadata")
+        setAccessibilityElement(true); setAccessibilityRole(.staticText); setAccessibilityLabel(full)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() {
+        effectiveAppearance.performAsCurrentDrawingAppearance { layer?.backgroundColor = SettingsPalette.subtle.cgColor }
+    }
+    override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); needsDisplay = true }
 }
 
 /// NSScrollView can install a document before Auto Layout gives it a viewport.

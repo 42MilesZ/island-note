@@ -43,14 +43,15 @@ final class SettingsSurface: NSView {
 
 final class SettingsButton: NSButton {
     private let quiet: Bool
+    private let emphasized: Bool
     private var hovered = false
     private var pressed = false
     private var tracking: NSTrackingArea?
-    init(title: String, target: AnyObject?, action: Selector?, quiet: Bool = false) {
-        self.quiet = quiet; super.init(frame: .zero)
+    init(title: String, target: AnyObject?, action: Selector?, quiet: Bool = false, emphasized: Bool = false) {
+        self.quiet = quiet; self.emphasized = emphasized; super.init(frame: .zero)
         self.title = title; self.target = target; self.action = action
         isBordered = false; bezelStyle = .regularSquare
-        font = .systemFont(ofSize: 13, weight: .regular)
+        font = .systemFont(ofSize: emphasized ? 14 : 13, weight: emphasized ? .medium : .regular)
         wantsLayer = true; layer?.cornerRadius = 12; layer?.cornerCurve = .continuous
         translatesAutoresizingMaskIntoConstraints = false
         heightAnchor.constraint(equalToConstant: 36).isActive = true
@@ -58,6 +59,9 @@ final class SettingsButton: NSButton {
         updateColors(animated: false)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    // Icon controls draw their own full background; native toggle-cell alignment
+    // insets must not make a lock taller than the adjacent menu control.
+    override var alignmentRectInsets: NSEdgeInsets { title.isEmpty ? NSEdgeInsetsZero : super.alignmentRectInsets }
     override var isEnabled: Bool { didSet { updateColors(animated: false) } }
     override func viewDidChangeEffectiveAppearance() { super.viewDidChangeEffectiveAppearance(); updateColors(animated: false) }
     override func updateTrackingAreas() {
@@ -72,8 +76,9 @@ final class SettingsButton: NSButton {
     private func updateColors(animated: Bool) {
         guard let layer else { return }
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            contentTintColor = isEnabled ? SettingsPalette.ink : SettingsPalette.secondary.withAlphaComponent(0.4)
-            let color = !isEnabled ? (quiet ? .clear : SettingsPalette.subtle)
+            contentTintColor = isEnabled ? (emphasized ? SettingsPalette.inverse : SettingsPalette.ink) : SettingsPalette.secondary.withAlphaComponent(0.4)
+            let color = emphasized && isEnabled ? SettingsPalette.ink.withAlphaComponent(pressed ? 0.72 : hovered ? 0.86 : 1)
+                : !isEnabled ? (quiet ? .clear : SettingsPalette.subtle)
                 : pressed ? SettingsPalette.pressed : hovered ? SettingsPalette.hover : quiet ? .clear : SettingsPalette.subtle
             if animated { SettingsPalette.animate(layer, key: "backgroundColor", value: color.cgColor, duration: 0.16) }
             else { layer.backgroundColor = color.cgColor }

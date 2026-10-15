@@ -16,6 +16,26 @@ final class FlomoConflictWindowTests: XCTestCase {
         return controller
     }
 
+    private func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+
+    private func render(_ controller: FlomoConflictWindowController, name: String) throws {
+        guard let directory = ProcessInfo.processInfo.environment["ISLAND_NOTE_RENDER_DIR"] else { return }
+        let window = try XCTUnwrap(controller.window), root = try XCTUnwrap(window.contentView)
+        controller.showWindow(nil)
+        controller.prepareTextLayout()
+        for button in [controller.scrollLockButton!, controller.moreButton!] {
+            XCTAssertFalse(button.isHiddenOrHasHiddenAncestor)
+            XCTAssertEqual(button.frame.width, 36, accuracy: 0.1)
+            XCTAssertEqual(button.frame.height, 36, accuracy: 0.1)
+            XCTAssertTrue(root.bounds.contains(button.convert(button.bounds, to: root)))
+        }
+        window.displayIfNeeded()
+        let bitmap = try XCTUnwrap(root.bitmapImageRepForCachingDisplay(in: root.bounds))
+        root.cacheDisplay(in: root.bounds, to: bitmap)
+        try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+            .write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
+    }
+
     private func scroll(_ view: NSScrollView, to progress: CGFloat) {
         let clip = view.contentView
         let range = max(0, clip.documentRect.height - clip.bounds.height)
@@ -175,14 +195,7 @@ final class FlomoConflictWindowTests: XCTestCase {
                     XCTAssertEqual(button.accessibilityLabel(), L10n.tr("Synchronized scrolling"))
                     XCTAssertEqual(button.accessibilityRole(), .checkBox)
                     XCTAssertEqual(button.accessibilityValue() as? Int, locked ? 1 : 0)
-                    if let directory = ProcessInfo.processInfo.environment["ISLAND_NOTE_RENDER_DIR"] {
-                        window.displayIfNeeded()
-                        let bitmap = try XCTUnwrap(root.bitmapImageRepForCachingDisplay(in: root.bounds))
-                        root.cacheDisplay(in: root.bounds, to: bitmap)
-                        let name = "\(language == .chinese ? "zh" : "en")-\(dark ? "dark" : "light")-\(locked ? "locked" : "unlocked").png"
-                        try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
-                            .write(to: URL(fileURLWithPath: directory).appendingPathComponent(name))
-                    }
+                    try render(controller, name: "\(language == .chinese ? "zh" : "en")-\(dark ? "dark" : "light")-\(locked ? "locked" : "unlocked")")
                 }
             }
         }
@@ -241,15 +254,140 @@ final class FlomoConflictWindowTests: XCTestCase {
             controller.prepareTextLayout()
             XCTAssertFalse(controller.localButton.isEnabled)
             XCTAssertFalse(controller.remoteButton.isEnabled)
-            XCTAssertTrue(controller.mergeButton.isEnabled)
-            XCTAssertEqual(controller.mergeButton.title, L10n.tr("Resume Sync"))
+            let resume = try XCTUnwrap(controller.resumeButton)
+            XCTAssertTrue(resume.isEnabled)
+            XCTAssertEqual(resume.title, L10n.tr("Resume Sync"))
+            XCTAssertFalse(controller.moreMenu.items[0].isEnabled)
             let root = try XCTUnwrap(controller.window?.contentView)
             func fields(_ view: NSView) -> [NSTextField] {
                 (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap(fields)
             }
             XCTAssertEqual(fields(root).filter { $0.stringValue == L10n.tr("Update time unavailable") }.count, 2)
-            XCTAssertTrue(root.bounds.contains(controller.mergeButton.convert(controller.mergeButton.bounds, to: root)))
+            XCTAssertTrue(root.bounds.contains(resume.convert(resume.bounds, to: root)))
+            try render(controller, name: "\(language.rawValue)-paused")
         }
+    }
+
+    func testCompactMetadataAndOnlyOneSelectionPerCardAtBothWindowSizes() throws {
+        _ = NSApplication.shared
+        let original = L10n.language
+        defer { L10n.language = original }
+        let date = Date(timeIntervalSince1970: 1_792_001_123)
+        for language in [AppLanguage.chinese, .english] {
+            L10n.language = language
+            for dark in [false, true] {
+                for size in [NSSize(width: 720, height: 500), NSSize(width: 880, height: 680)] {
+                    let controller = FlomoConflictWindowController(conflict: SyncConflict(local: String(repeating: paragraph, count: 60),
+                        remote: FlomoMemo(id: "fixture", content: String(repeating: paragraph, count: 40), updatedAt: "2026-10-15T08:15:27+08:00"),
+                        localUpdatedAt: date, capturedAt: date.addingTimeInterval(600)),
+                        phase: .conflict, lastVerifiedAt: date.addingTimeInterval(-600), canChoose: true, canMerge: true)
+                    let window = try XCTUnwrap(controller.window)
+                    defer { window.close() }
+                    window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                    window.setContentSize(size); controller.prepareTextLayout()
+                    let root = try XCTUnwrap(window.contentView), views = descendants(root)
+                    for button in [controller.localButton!, controller.remoteButton!] {
+                        let card = try XCTUnwrap(button.superview)
+                        XCTAssertEqual(descendants(card).filter { $0 is NSButton }.count, 1)
+                        XCTAssertTrue(root.bounds.contains(button.convert(button.bounds, to: root)))
+                        XCTAssertEqual(button.font?.pointSize, 14)
+                    }
+                    XCTAssertEqual(controller.localButton.title, L10n.tr("Use Island Note"))
+                    XCTAssertEqual(controller.remoteButton.title, L10n.tr("Use Flomo"))
+                    XCTAssertNil(controller.resumeButton)
+                    XCTAssertEqual(controller.moreButton.frame.size, controller.scrollLockButton.frame.size)
+                    XCTAssertEqual(controller.moreButton.frame.height, 36, accuracy: 0.1)
+                    XCTAssertEqual(views.filter { $0 is NSButton }.count, 4, "Two choices plus lock and more icon controls")
+                    let metadata = views.filter { $0.accessibilityIdentifier() == "syncReview.metadata" }
+                    XCTAssertEqual(metadata.count, 6)
+                    for tag in metadata {
+                        XCTAssertEqual(tag.accessibilityRole(), .staticText)
+                        XCTAssertTrue(root.bounds.contains(tag.convert(tag.bounds, to: root)))
+                        for child in descendants(tag).compactMap({ $0 as? NSTextField }) {
+                            let available = child.bounds.width
+                            let needed = child.intrinsicContentSize.width
+                            XCTAssertGreaterThanOrEqual(available + 1, needed, "Known metadata must fit without truncation: \(child.stringValue)")
+                        }
+                    }
+                    XCTAssertTrue(metadata.contains { $0.toolTip?.contains(FlomoConflictWindowController.dateText(date)) == true })
+                    XCTAssertFalse(views.contains { $0.accessibilityIdentifier() == "syncReview.warning" })
+                    let fields = views.compactMap { $0 as? NSTextField }.map(\.stringValue)
+                    XCTAssertTrue(fields.contains(L10n.tr("Choose one copy for both")))
+                    XCTAssertFalse(fields.contains("Updates Flomo"))
+                    XCTAssertFalse(fields.contains("Updates Island Note"))
+                    XCTAssertTrue(controller.moreMenu.items[0].isEnabled)
+                    XCTAssertEqual(controller.moreMenu.items[0].title, L10n.tr("Combine Both Copies"))
+                    try render(controller, name: "\(language.rawValue)-\(dark ? "dark" : "light")-\(Int(size.width))")
+                }
+            }
+        }
+    }
+
+    func testRefreshFailureAndUnconfirmedUploadRemainVisible() throws {
+        _ = NSApplication.shared
+        let original = L10n.language
+        defer { L10n.language = original }
+        for language in [AppLanguage.chinese, .english] {
+            L10n.language = language
+            for phase in [SyncPhase.offline, .verifyWrite] {
+                let error = phase == .offline ? "Could not refresh the remote copy. Please try again when your connection is available." : nil
+                let controller = FlomoConflictWindowController(conflict: SyncConflict(local: "Local", remote: FlomoMemo(id: "fixture", content: "Remote", updatedAt: "")),
+                    phase: phase, lastVerifiedAt: nil, canChoose: true, canMerge: false, reviewError: error)
+                defer { controller.window?.close() }
+                controller.window?.setContentSize(NSSize(width: 720, height: 500)); controller.prepareTextLayout()
+                let root = try XCTUnwrap(controller.window?.contentView)
+                let warning = try XCTUnwrap(descendants(root).first { $0.accessibilityIdentifier() == "syncReview.warning" } as? NSTextField)
+                XCTAssertEqual(warning.stringValue, error ?? L10n.tr("Last upload unconfirmed."))
+                XCTAssertTrue(root.bounds.contains(warning.convert(warning.bounds, to: root)))
+                XCTAssertFalse(controller.moreMenu.items[0].isEnabled)
+                XCTAssertGreaterThan(controller.localScroll.bounds.height, 100)
+                try render(controller, name: "\(language.rawValue)-\(phase == .offline ? "offline" : "unconfirmed")")
+            }
+        }
+    }
+
+    func testSourceButtonsAndSecondaryMenuReturnTheCorrespondingChoice() async throws {
+        for index in 0..<4 {
+            let controller = fixture(local: "Local", remote: "Remote")
+            Task { @MainActor in
+                switch index {
+                case 0: controller.localButton.performClick(nil)
+                case 1: controller.remoteButton.performClick(nil)
+                case 2: controller.moreMenu.performActionForItem(at: 2)
+                default: controller.window?.close()
+                }
+            }
+            let result = await controller.run()
+            switch (index, result) {
+            case (0, .choose(.local)), (1, .choose(.remote)), (2, nil), (3, nil): break
+            default: XCTFail("Selection mapped to the wrong action: \(index)")
+            }
+            XCTAssertFalse(controller.window?.isVisible ?? true)
+        }
+        let controller = FlomoConflictWindowController(conflict: SyncConflict(local: "Local", remote: FlomoMemo(id: "fixture", content: "Remote", updatedAt: "")),
+            phase: .mergeRequired, lastVerifiedAt: nil, canChoose: true, canMerge: true)
+        Task { @MainActor in controller.moreMenu.performActionForItem(at: 0) }
+        guard case .choose(.merge) = await controller.run() else { return XCTFail("Combine must retain the merge action") }
+    }
+
+    func testEscapeCancelsFromFocusedTextAndPausedReviewCanResume() async throws {
+        let controller = fixture(local: "Local", remote: "Remote")
+        Task { @MainActor in
+            let window = controller.window!
+            XCTAssertTrue(window.firstResponder is NSTextView)
+            let event = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: 53)!
+            window.sendEvent(event)
+            XCTAssertFalse(window.isVisible, "Escape must still dismiss without a visible Later button")
+            if window.isVisible { window.close() }
+        }
+        let cancelled = await controller.run()
+        XCTAssertNil(cancelled)
+        let paused = FlomoConflictWindowController(conflict: SyncConflict(local: "Local", remote: FlomoMemo(id: "fixture", content: "Remote", updatedAt: "")),
+            phase: .conflict, lastVerifiedAt: nil, canChoose: false, canMerge: false)
+        Task { @MainActor in paused.resumeButton?.performClick(nil) }
+        guard case .resume = await paused.run() else { return XCTFail("Resume must remain available when paused") }
     }
 
     func testServiceDatesPreserveUnknownTimezoneAndDecodeOffsets() {
