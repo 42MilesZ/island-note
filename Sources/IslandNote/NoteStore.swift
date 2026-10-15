@@ -213,6 +213,11 @@ final class NoteStore {
     }
 
     var path: String { fileURL.path }
+    var modifiedAt: Date? {
+        var url = fileURL
+        url.removeCachedResourceValue(forKey: .contentModificationDateKey)
+        return try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+    }
 
     func load() throws -> String {
         if let configurationError { throw configurationError }

@@ -94,7 +94,8 @@ enum SyncDocument {
     }
 
     private static func comparisonLines(_ text: String) -> [String] {
-        normalized(text).components(separatedBy: "\n")
+        var followsList = false
+        return normalized(text).components(separatedBy: "\n")
             .filter { !$0.isEmpty && !isEmptyDraftBullet($0) }
             .map { line in
             var compared = line
@@ -102,6 +103,13 @@ enum SyncDocument {
             let body = compared.dropFirst(indentation.count)
             if listKind(String(body)) != nil {
                 compared = indentation.replacingOccurrences(of: "\t", with: "  ") + body
+                followsList = true
+            } else if indentation.isEmpty || body.range(of: #"^#{1,6}\s+"#, options: .regularExpression) != nil {
+                followsList = false
+            } else if !followsList, indentation.count <= 3, indentation.allSatisfy({ $0 == " " }) {
+                // Flomo adds up to three spaces to ordinary paragraph lines.
+                // List nesting and four-space code indentation remain distinct.
+                compared = String(body)
             }
             // Flomo removes escapes before a lone tilde in an iCloud path and
             // adds escapes to hyphens immediately following bold spans.

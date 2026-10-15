@@ -2,14 +2,24 @@ import AppKit
 
 @MainActor
 enum FlomoSettings {
-    static func show(_ sync: FlomoSync) async {
+    static func show(_ sync: FlomoSync, refreshReview: Bool = true) async {
         guard !sync.isStopped else { return }
-        if sync.record.enabled, [.conflict, .mergeRequired, .formattingChanged, .verifyWrite].contains(sync.phase) {
+        if refreshReview, sync.record.enabled, [.conflict, .mergeRequired, .formattingChanged, .verifyWrite].contains(sync.phase) {
             await sync.prepareReview()
             guard !sync.isStopped else { return }
+            if sync.phase == .synced, sync.conflict == nil { return }
         }
         if !sync.requiresReconnection, let conflict = sync.conflict {
-            review(conflict, sync: sync)
+            let review = FlomoConflictWindowController(conflict: conflict, sync: sync)
+            if let action = await review.run() {
+                switch action {
+                case .choose(let choice): await sync.synchronize(choice: choice, reviewed: conflict)
+                case .resume: sync.resume()
+                }
+                // Preserve a rejected operation's reason on the comparison.
+                // A new user choice still fetches and validates both copies.
+                if sync.conflict != nil { await show(sync, refreshReview: sync.reviewError == nil) }
+            }
             return
         }
         if [.connectionFailed, .offline, .unsupported, .tooLong, .failed, .rateLimited, .localChanged].contains(sync.phase)
@@ -117,56 +127,6 @@ enum FlomoSettings {
         } else { id = input }
         guard id.range(of: "^[A-Za-z0-9_-]+$", options: .regularExpression) != nil else { throw SettingsError.invalidID }
         return id
-    }
-
-    private static func review(_ conflict: SyncConflict, sync: FlomoSync) {
-        let alert = NSAlert()
-        alert.messageText = sync.phase == .mergeRequired ? L10n.tr("Merge your two notes") : L10n.tr("Review sync differences")
-        alert.informativeText = sync.status + L10n.tr("\n\nMerge Both keeps the Island Note text followed by the Flomo text in one document and the same memo. Both originals are backed up locally. If either copy changes during review, Island Note will ask you to review again.")
-        alert.addButton(withTitle: L10n.tr("Use Island Note"))
-        alert.addButton(withTitle: L10n.tr("Cancel"))
-        alert.addButton(withTitle: L10n.tr("Use Flomo"))
-        alert.addButton(withTitle: sync.record.enabled ? L10n.tr("Pause Sync") : L10n.tr("Resume Sync"))
-        alert.addButton(withTitle: L10n.tr("Merge Both")).isEnabled = sync.record.enabled && sync.record.pendingWrite == nil
-        alert.buttons[0].isEnabled = sync.record.enabled
-        alert.buttons[2].isEnabled = sync.record.enabled
-        let stack = NSStackView()
-        stack.orientation = .horizontal
-        stack.spacing = 12
-        for (title, text) in [("Island Note", conflict.local), ("Flomo", SyncDocument.fromFlomo(conflict.remote.content))] {
-            let column = NSStackView()
-            column.orientation = .vertical
-            column.alignment = .leading
-            column.addArrangedSubview(NSTextField(labelWithString: title))
-            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 260))
-            scroll.hasVerticalScroller = true
-            scroll.borderType = .bezelBorder
-            let view = NSTextView(frame: scroll.bounds)
-            view.isEditable = false
-            view.isSelectable = true
-            view.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
-            view.string = text
-            view.autoresizingMask = [.width]
-            view.textContainer?.widthTracksTextView = true
-            scroll.documentView = view
-            column.addArrangedSubview(scroll)
-            scroll.widthAnchor.constraint(equalToConstant: 300).isActive = true
-            scroll.heightAnchor.constraint(equalToConstant: 260).isActive = true
-            stack.addArrangedSubview(column)
-        }
-        stack.frame.size = NSSize(width: 612, height: 290)
-        alert.accessoryView = stack
-        let result = alert.runModal()
-        let choice: SyncChoice
-        switch result {
-        case .alertFirstButtonReturn: choice = .local
-        case .alertThirdButtonReturn: choice = .remote
-        case NSApplication.ModalResponse(rawValue: 1003):
-            if sync.record.enabled { sync.pause() } else { sync.resume() }; return
-        case NSApplication.ModalResponse(rawValue: 1004): choice = .merge
-        default: return
-        }
-        Task { await sync.synchronize(choice: choice, reviewed: conflict) }
     }
 
     static func error(_ message: String) {

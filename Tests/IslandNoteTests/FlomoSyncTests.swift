@@ -245,6 +245,108 @@ final class FlomoSyncTests: XCTestCase {
         sync.pause()
     }
 
+    func testConflictIncludesLocalModificationTimeAndRemoteVersion() async throws {
+        let (sync, _) = try make()
+        defer { sync.stop() }
+        let client = FakeFlomo()
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        sync.readLocal = { "Local" }
+        sync.localUpdatedAt = { date }
+        client.memo = FlomoMemo(id: "test", content: "Remote", updatedAt: "2026-10-14T18:00:00+08:00")
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(sync.conflict?.localUpdatedAt, date)
+        XCTAssertEqual(sync.conflict?.remote.updatedAt, client.memo.updatedAt)
+        XCTAssertNotNil(sync.conflict?.capturedAt)
+    }
+
+    func testReviewResolvesConvergedCopiesWithoutWriting() async throws {
+        let (sync, _) = try make()
+        defer { sync.stop() }
+        let client = FakeFlomo()
+        var local = "Local"
+        sync.readLocal = { local }
+        client.memo = FlomoMemo(id: "test", content: "Remote", updatedAt: "v2")
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertNotNil(sync.conflict)
+        local = "Remote"
+        await sync.prepareReview()
+        XCTAssertNil(sync.conflict)
+        XCTAssertNil(sync.record.reviewPhase)
+        XCTAssertEqual(sync.phase, .synced)
+        XCTAssertEqual(client.updates, 0)
+    }
+
+    func testOfflineReviewKeepsConflictAndExposesFailureSeparately() async throws {
+        let (sync, _) = try make()
+        defer { sync.stop() }
+        let client = FakeFlomo()
+        client.memo = FlomoMemo(id: "test", content: "Remote", updatedAt: "v2")
+        sync.readLocal = { "Local" }
+        sync.start(client: client)
+        await sync.synchronize()
+        let captured = try XCTUnwrap(sync.conflict?.capturedAt)
+        client.fetchError = FlomoClientError.offline
+        await sync.prepareReview()
+        XCTAssertEqual(sync.phase, .conflict)
+        XCTAssertEqual(sync.conflict?.capturedAt, captured)
+        XCTAssertTrue(try XCTUnwrap(sync.reviewError).contains(L10n.tr(FlomoClientError.offline.messageKey)))
+        XCTAssertEqual(client.updates, 0)
+        client.fetchError = nil
+        await sync.prepareReview()
+        XCTAssertNil(sync.reviewError)
+    }
+
+    func testCurrentConvergenceResolvesOlderUnconfirmedWrite() async throws {
+        let (sync, url) = try make(SyncRecord(enabled: true, memoID: "test", baseline: "Base", remoteBaseline: "Base",
+                                             pendingWrite: "Older upload", reviewPhase: .verifyWrite))
+        defer { sync.stop() }
+        let client = FakeFlomo()
+        client.memo = FlomoMemo(id: "test", content: "Current text", updatedAt: "v3")
+        sync.readLocal = { "Current text" }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(client.updates, 0)
+        XCTAssertEqual(sync.phase, .synced)
+        XCTAssertEqual(sync.record.baseline, "Current text")
+        XCTAssertNil(try FlomoSync(stateURL: url).record.pendingWrite)
+    }
+
+    func testUnchangedRemoteVersionRecoversAnUnappliedWriteUsingNewestLocalText() async throws {
+        let (sync, _) = try make(SyncRecord(enabled: true, memoID: "test", baseline: "Base", remoteBaseline: "Base",
+                                            pendingWrite: "Previous attempt", pendingRemoteBaseline: "Base", pendingRemoteVersion: "v1",
+                                            reviewPhase: .verifyWrite))
+        defer { sync.stop() }
+        let client = FakeFlomo()
+        sync.readLocal = { "Newer local text" }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(client.updates, 1)
+        XCTAssertEqual(SyncDocument.fromFlomo(client.memo.content), "Newer local text")
+        XCTAssertEqual(sync.phase, .synced)
+        XCTAssertNil(sync.record.pendingRemoteBaseline)
+        XCTAssertNil(sync.record.pendingRemoteVersion)
+    }
+
+    func testChangedRemoteVersionKeepsUnconfirmedWriteForReview() async throws {
+        let (sync, _) = try make(SyncRecord(enabled: true, memoID: "test", baseline: "Base", remoteBaseline: "Base",
+                                            pendingWrite: "Previous attempt", pendingRemoteBaseline: "Base", pendingRemoteVersion: "v0"))
+        defer { sync.stop() }
+        let client = FakeFlomo()
+        sync.readLocal = { "Newer local text" }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(client.updates, 0)
+        XCTAssertNotNil(sync.conflict)
+        XCTAssertEqual(sync.record.pendingWrite, "Previous attempt")
+    }
+
+    func testOldRecordsWithoutRemoteBaselineStillProtectAgainstTransportLoss() {
+        XCTAssertEqual(SyncComparison.direction(baseline: "Folder~name", local: "Folder~name", remote: "Foldername"), .conflict)
+        XCTAssertEqual(SyncComparison.direction(baseline: "Base", local: "Local edit", remote: "Remote edit"), .conflict)
+    }
+
     func testUnknownCreateSurvivesRestartAndCannotBeRetriedByReconnect() async throws {
         let (sync, url) = try make(SyncRecord(enabled: true))
         let client = FakeFlomo()
@@ -359,6 +461,7 @@ final class FlomoSyncTests: XCTestCase {
         await sync.synchronize(choice: .merge, reviewed: try XCTUnwrap(sync.conflict))
         XCTAssertEqual(client.updates, 0)
         XCTAssertNotNil(sync.conflict)
+        XCTAssertEqual(sync.reviewError, L10n.tr("The merged note is too large or contains unsupported syntax. Both copies are preserved."))
         sync.pause()
     }
 

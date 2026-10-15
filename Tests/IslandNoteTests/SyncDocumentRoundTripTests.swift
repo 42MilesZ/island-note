@@ -56,6 +56,17 @@ final class SyncDocumentRoundTripTests: XCTestCase {
         XCTAssertFalse(SyncDocument.equivalent(local: "- Important item", remote: ""))
     }
 
+    func testFlomoParagraphIndentationIsCosmeticButListNestingAndHardBreaksRemainDistinct() {
+        let local = "**Paragraph**\nNext line"
+        let remote = "  **Paragraph**\n   Next line"
+        XCTAssertTrue(SyncDocument.equivalent(local: local, remote: remote))
+        XCTAssertFalse(SyncDocument.equivalent(local: "Line\nNext", remote: "Line  \nNext"))
+        XCTAssertFalse(SyncDocument.equivalent(local: "Plain text", remote: "    Plain text"))
+        XCTAssertFalse(SyncDocument.equivalent(local: "- Item", remote: "  - Item"))
+        XCTAssertFalse(SyncDocument.equivalent(local: "- Item\ncontinuation", remote: "- Item\n  continuation"))
+        XCTAssertFalse(SyncDocument.equivalent(local: local, remote: remote + "\nAn actual edit"))
+    }
+
     func testWordInternalTildesSurviveRepeatedOutboundRoundTrips() {
         let local = "iCloud~md~obsidian and a~b"
         let encoded = "iCloud\\~md\\~obsidian and a\\~b"

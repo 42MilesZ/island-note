@@ -14,6 +14,8 @@ struct SyncRecord: Codable, Equatable {
     var remoteBaseline: String?
     var pendingWrite: String?
     var pendingEncodedContent: String?
+    var pendingRemoteBaseline: String?
+    var pendingRemoteVersion: String?
     var pendingMerge: PendingMerge?
     var creationUncertain = false
     var lastVerifiedAt: Date?
@@ -28,6 +30,8 @@ enum SyncChoice { case local, remote, merge }
 struct SyncConflict {
     let local: String
     let remote: FlomoMemo
+    var localUpdatedAt: Date? = nil
+    var capturedAt: Date = Date()
 }
 
 enum SyncDirection: Equatable { case none, push, pull, conflict }
@@ -38,8 +42,8 @@ enum SyncComparison {
         guard let baseline else { return .conflict }
         let localChanged = !SyncDocument.equivalent(local: baseline, remote: local)
         guard let remoteBaseline else {
-            // Old records lack the exact remote representation; don't assume
-            // formatting differences are changes safe to pull automatically.
+            // Old records lack the exact remote representation; formatting
+            // damage from an older encoder still requires review.
             return SyncDocument.equivalent(local: baseline, remote: remote) ? .push : .conflict
         }
         let remoteChanged = !SyncDocument.equivalent(local: remoteBaseline, remote: remote)
@@ -56,10 +60,12 @@ final class FlomoSync {
     private(set) var status = L10n.tr("Flomo not connected")
     private(set) var requiresReconnection = false
     private(set) var conflict: SyncConflict?
+    private(set) var reviewError: String?
     private(set) var phase: SyncPhase = .disconnected
     var onStatus: ((SyncPhase, String) -> Void)?
     /// Must flush pending editor changes and read the current file each time.
     var readLocal: (() throws -> String)?
+    var localUpdatedAt: (() -> Date?)?
     /// Compare the editor/file against expected before applying; save a backup.
     var applyRemote: ((_ expected: String, _ replacement: String) throws -> Void)?
     private let stateURL: URL
@@ -170,6 +176,7 @@ final class FlomoSync {
         defer { running = false }
         let epoch = generation
         logger.info("Sync requested: review")
+        reviewError = nil
         do {
             await settleEditorUpdates()
             guard generation == epoch, record.enabled else { return }
@@ -177,10 +184,17 @@ final class FlomoSync {
             requiresReconnection = false
             await settleEditorUpdates()
             guard generation == epoch, record.enabled else { return }
-            showConflict(local: try readLocal(), remote: remote, message: "Review the latest local and Flomo copies before continuing.",
+            let local = try readLocal()
+            if SyncDocument.equivalent(local: local, remote: SyncDocument.fromFlomo(remote.content)) {
+                try confirmMatchingCopies(local: local, remote: remote)
+                return
+            }
+            showConflict(local: local, remote: remote, message: "Review the latest local and Flomo copies before continuing.",
                          phase: record.reviewPhase ?? .conflict)
         } catch {
             guard generation == epoch else { return }
+            reviewError = L10n.tr("Could not refresh. These are the last captured copies.") + " "
+                + L10n.tr((error as? FlomoClientError)?.messageKey ?? error.localizedDescription)
             requiresReconnection = error as? FlomoClientError == .authentication
             report((error as? FlomoClientError)?.messageKey ?? error.localizedDescription,
                    phase: error as? FlomoClientError == .authentication ? .authorizationRequired : .connectionFailed)
@@ -195,6 +209,7 @@ final class FlomoSync {
         var writeAttemptInFlight = false
         var beforeUnsentIntent: SyncRecord?
         var priorWriteIntent: SyncRecord?
+        reviewError = nil
         do {
             await settleEditorUpdates()
             guard record.enabled, generation == epoch else { return }
@@ -264,6 +279,24 @@ final class FlomoSync {
                     record.baseline = pending
                     record.pendingWrite = nil
                     record.pendingEncodedContent = nil
+                    record.pendingRemoteBaseline = nil
+                    record.pendingRemoteVersion = nil
+                    try persist()
+                } else if SyncDocument.equivalent(local: local, remote: remoteText) {
+                    // Both current copies converged after an older uncertain
+                    // write. Verifying the current text resolves that intent.
+                    try confirmMatchingCopies(local: rawLocal, remote: remote)
+                    return
+                } else if let before = record.pendingRemoteBaseline,
+                          record.pendingRemoteVersion == remote.updatedAt,
+                          SyncDocument.equivalent(local: before, remote: remoteText) {
+                    // The remote version is still exactly the one seen before
+                    // issuing the write. Retry via the normal conditional path.
+                    logger.info("Unconfirmed write left the remote version unchanged; comparing current copies")
+                    record.pendingWrite = nil
+                    record.pendingEncodedContent = nil
+                    record.pendingRemoteBaseline = nil
+                    record.pendingRemoteVersion = nil
                     try persist()
                 } else if SyncDocument.isLegacyTransportLoss(local: pending, remote: remoteText),
                           record.pendingEncodedContent != SyncDocument.toFlomo(pending) {
@@ -350,6 +383,8 @@ final class FlomoSync {
                 priorWriteIntent = priorWriteIntent ?? record
                 record.pendingWrite = local
                 record.pendingEncodedContent = SyncDocument.toFlomo(local)
+                record.pendingRemoteBaseline = remoteText
+                record.pendingRemoteVersion = remote.updatedAt
                 try persist()
                 report("Uploading local changes and verifying the saved memo…", phase: .syncing)
                 beforeUnsentIntent = nil
@@ -399,6 +434,8 @@ final class FlomoSync {
                 record.creationUncertain = priorWriteIntent?.creationUncertain ?? false
                 record.pendingWrite = priorWriteIntent?.pendingWrite
                 record.pendingEncodedContent = priorWriteIntent?.pendingEncodedContent
+                record.pendingRemoteBaseline = priorWriteIntent?.pendingRemoteBaseline
+                record.pendingRemoteVersion = priorWriteIntent?.pendingRemoteVersion
                 try? persist()
             }
             guard generation == epoch else {
@@ -428,16 +465,35 @@ final class FlomoSync {
             if record.creationUncertain { record.reviewPhase = .recoverCreate }
             else if record.reviewPhase == nil && record.pendingWrite != nil { record.reviewPhase = .verifyWrite }
             if failurePhase == .conflict { record.reviewPhase = .conflict }
+            if conflict != nil {
+                reviewError = L10n.tr((cause as? FlomoClientError)?.messageKey ?? (cause as? SyncFailure)?.messageKey ?? cause.localizedDescription)
+            }
             do { try persist() } catch { logger.error("Could not persist sync review state") }
             report((cause as? FlomoClientError)?.messageKey ?? (cause as? SyncFailure)?.messageKey ?? cause.localizedDescription, phase: failurePhase)
         }
     }
 
     private func showConflict(local: String, remote: FlomoMemo, message: String, phase: SyncPhase = .conflict) {
-        conflict = SyncConflict(local: local, remote: remote)
+        reviewError = nil
+        conflict = SyncConflict(local: local, remote: remote, localUpdatedAt: localUpdatedAt?())
         record.reviewPhase = phase
         do { try persist() } catch { logger.error("Could not persist sync review state") }
         report(message, phase: phase)
+    }
+
+    private func confirmMatchingCopies(local: String, remote: FlomoMemo) throws {
+        record.baseline = SyncDocument.normalized(local)
+        record.remoteBaseline = SyncDocument.fromFlomo(remote.content)
+        record.lastVerifiedAt = Date()
+        record.pendingWrite = nil
+        record.pendingEncodedContent = nil
+        record.pendingRemoteBaseline = nil
+        record.pendingRemoteVersion = nil
+        record.pendingMerge = nil
+        record.reviewPhase = nil
+        try persist()
+        conflict = nil
+        report("Both copies are up to date.", phase: .synced)
     }
 
     private func settleEditorUpdates() async {
@@ -449,6 +505,10 @@ final class FlomoSync {
     }
 
     private func persist() throws {
+        if record.pendingWrite == nil {
+            record.pendingRemoteBaseline = nil
+            record.pendingRemoteVersion = nil
+        }
         try FileManager.default.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONEncoder().encode(record).write(to: stateURL, options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: stateURL.path)
@@ -465,6 +525,9 @@ final class FlomoSync {
     func refreshLanguage() { report(rawStatus, phase: phase) }
 
     private func report(_ text: String, phase: SyncPhase = .failed) {
+        if conflict != nil, [.unsupported, .tooLong, .failed, .localChanged].contains(phase) {
+            reviewError = L10n.tr(text)
+        }
         // An interrupted in-flight write is uncertain until a later read verifies
         // it. Neither pause nor an unrelated transport failure resolves it.
         let effectivePhase = record.reviewPhase ?? (phase == .paused && record.creationUncertain ? .recoverCreate

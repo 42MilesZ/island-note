@@ -1013,6 +1013,14 @@ final class IslandNoteController: NSObject {
             let settings = SettingsWindowController(preferences: preferences, diagnostics: diagnostics)
             settings.onFlomoToggle = { [weak self] in self?.setFlomoEnabled($0) ?? false }
             settings.onConfigureFlomo = { [weak self] in self?.showSyncSettings() }
+            settings.automaticSyncIsPaused = { [weak self] in
+                guard let sync = self?.sync, !sync.isStopped, !sync.isBusy, sync.record.memoID != nil else { return nil }
+                return !sync.record.enabled
+            }
+            settings.onToggleAutomaticSync = { [weak self] in
+                guard let sync = self?.sync, !sync.isStopped, !sync.isBusy else { return }
+                if sync.record.enabled { sync.pause() } else { sync.resume() }
+            }
             settings.onDiagnosticToggle = { [weak self] in self?.toggleDiagnostics() }
             settings.onExportDiagnostics = { [weak self] in self?.exportDiagnostics() }
             settings.onClearDiagnostics = { [weak self] in
@@ -1245,6 +1253,7 @@ final class IslandNoteController: NSObject {
                 if let updated = try self.store.refreshIfClean() { self.editor.replaceFromSync(updated) }
                 return self.editor.string
             }
+            sync.localUpdatedAt = { [weak self] in self?.store.modifiedAt }
             sync.applyRemote = { [weak self, weak sync] expected, replacement in
                 guard let self, let sync else { throw SyncFailure.localUnavailable }
                 self.editor.flushPending()

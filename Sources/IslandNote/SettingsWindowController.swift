@@ -15,6 +15,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var infoPopover: NSPopover?
     var onFlomoToggle: ((Bool) -> Bool)?
     var onConfigureFlomo: (() -> Void)?
+    var automaticSyncIsPaused: (() -> Bool?)?
+    var onToggleAutomaticSync: (() -> Void)?
     var onDiagnosticToggle: (() -> Void)?
     var onExportDiagnostics: (() -> Void)?
     var onClearDiagnostics: (() -> Void)?
@@ -178,9 +180,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     @objc private func openNote() { onOpenNote?(); rebuild() }
     @objc private func saveNoteAs() { onSaveNoteAs?(); rebuild() }
     @objc private func importConnection() { onImportConnection?(); rebuild() }
+    @objc private func toggleAutomaticSync() { onToggleAutomaticSync?(); rebuild() }
     @objc private func flomoOptions(_ sender: NSButton) {
         let menu = NSMenu()
         menu.autoenablesItems = false
+        if let paused = automaticSyncIsPaused?() {
+            let toggle = NSMenuItem(title: L10n.tr(paused ? "Resume Sync" : "Pause Sync"), action: #selector(toggleAutomaticSync), keyEquivalent: "")
+            toggle.target = self; menu.addItem(toggle); menu.addItem(.separator())
+        }
         let restore = NSMenuItem(title: L10n.tr("Restore Previous Flomo Connection…"), action: #selector(importConnection), keyEquivalent: "")
         restore.isEnabled = onImportConnection != nil
         restore.target = self; menu.addItem(restore)
