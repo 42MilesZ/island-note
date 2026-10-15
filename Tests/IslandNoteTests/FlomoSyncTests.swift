@@ -451,6 +451,28 @@ final class FlomoSyncTests: XCTestCase {
         sync.pause()
     }
 
+    func testUploadedListAndFollowingParagraphVerifyAfterFlomoAddsIndent() async throws {
+        let (sync, _) = try make()
+        let client = FakeFlomo()
+        let local = "- Task\n\t- Child\n**Evaluation**\nParagraph"
+        sync.readLocal = { local }
+        client.onUpdate = {
+            let returned = client.memo.content.replacingOccurrences(of: "\t- Child", with: "  - Child")
+                .replacingOccurrences(of: "\n**Evaluation**", with: "\n\n  **Evaluation**")
+                .replacingOccurrences(of: "\nParagraph", with: "\n\n  Paragraph")
+            client.memo = FlomoMemo(id: "test", content: returned, updatedAt: client.memo.updatedAt)
+        }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(sync.phase, .synced)
+        XCTAssertNil(sync.record.pendingWrite)
+        XCTAssertNil(sync.conflict)
+        XCTAssertEqual(client.updates, 1)
+        await sync.synchronize()
+        XCTAssertEqual(client.updates, 1)
+        sync.pause()
+    }
+
     func testOversizedMergePreservesBothOriginals() async throws {
         let (sync, _) = try make()
         let client = FakeFlomo()

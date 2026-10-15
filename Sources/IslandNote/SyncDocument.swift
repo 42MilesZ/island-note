@@ -77,6 +77,12 @@ enum SyncDocument {
         comparisonLines(local) == comparisonLines(remote)
     }
 
+    /// Reuse readback normalization when matching a merge unit. Its heading
+    /// and list-parent scope are tracked separately by the merge algorithm.
+    static func comparisonKey(_ text: String) -> String {
+        comparisonLines(text).joined(separator: "\n")
+    }
+
     /// Recognize the old transport's specific loss of word-internal tildes.
     /// This must only be used to repair an already pending upload after a
     /// version-checked readback, never to absorb arbitrary remote edits.
@@ -94,7 +100,6 @@ enum SyncDocument {
     }
 
     private static func comparisonLines(_ text: String) -> [String] {
-        var followsList = false
         return normalized(text).components(separatedBy: "\n")
             .filter { !$0.isEmpty && !isEmptyDraftBullet($0) }
             .map { line in
@@ -103,11 +108,11 @@ enum SyncDocument {
             let body = compared.dropFirst(indentation.count)
             if listKind(String(body)) != nil {
                 compared = indentation.replacingOccurrences(of: "\t", with: "  ") + body
-                followsList = true
-            } else if indentation.isEmpty || body.range(of: #"^#{1,6}\s+"#, options: .regularExpression) != nil {
-                followsList = false
-            } else if !followsList, indentation.count <= 3, indentation.allSatisfy({ $0 == " " }) {
-                // Flomo adds up to three spaces to ordinary paragraph lines.
+            } else if indentation.count <= 3, indentation.allSatisfy({ $0 == " " }),
+                      body.range(of: #"^#{1,6}\s+"#, options: .regularExpression) == nil {
+                // Flomo adds up to three spaces to ordinary paragraphs,
+                // including paragraphs following a list. Their words and
+                // order remain exact; nonempty list item nesting stays strict.
                 // List nesting and four-space code indentation remain distinct.
                 compared = String(body)
             }

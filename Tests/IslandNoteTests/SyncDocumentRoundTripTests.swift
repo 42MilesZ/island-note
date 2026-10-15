@@ -63,8 +63,17 @@ final class SyncDocumentRoundTripTests: XCTestCase {
         XCTAssertFalse(SyncDocument.equivalent(local: "Line\nNext", remote: "Line  \nNext"))
         XCTAssertFalse(SyncDocument.equivalent(local: "Plain text", remote: "    Plain text"))
         XCTAssertFalse(SyncDocument.equivalent(local: "- Item", remote: "  - Item"))
-        XCTAssertFalse(SyncDocument.equivalent(local: "- Item\ncontinuation", remote: "- Item\n  continuation"))
+        XCTAssertTrue(SyncDocument.equivalent(local: "- Item\ncontinuation", remote: "- Item\n  continuation"))
         XCTAssertFalse(SyncDocument.equivalent(local: local, remote: remote + "\nAn actual edit"))
+    }
+
+    func testFlomoIndentOnParagraphsFollowingAListDoesNotRequireReview() {
+        let local = "### Project\n- Task\n\t- Child\n**Shared evaluation**\nShared paragraph\n\n- Next task"
+        let remote = "### Project\n\n- Task\n  - Child\n\n  **Shared evaluation**\n\n  Shared paragraph\n\n- Next task"
+        XCTAssertTrue(SyncDocument.equivalent(local: local, remote: remote))
+        XCTAssertFalse(SyncDocument.equivalent(local: local, remote: remote.replacingOccurrences(of: "Shared paragraph", with: "Changed paragraph")))
+        XCTAssertFalse(SyncDocument.equivalent(local: local, remote: remote.replacingOccurrences(of: "  - Child", with: "- Child")))
+        XCTAssertFalse(SyncDocument.equivalent(local: local, remote: remote.replacingOccurrences(of: "  Shared paragraph", with: "  Shared paragraph  ")))
     }
 
     func testWordInternalTildesSurviveRepeatedOutboundRoundTrips() {

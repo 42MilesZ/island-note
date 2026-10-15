@@ -63,11 +63,9 @@ final class SyncMergeTests: XCTestCase {
         let remote = "# 灵感 🏝️\n- café 👩🏽‍💻\n  - 新子项 🧑🏽‍💻\n结尾"
         let result = SyncMerge.combine(local: local, remote: remote).text
 
-        // Distinct nested trees stay intact instead of silently reparenting a
-        // child. Their shared parent label remains in each editable variant.
-        XCTAssertEqual(occurrences("- café 👩🏽‍💻", in: result), 2)
+        XCTAssertEqual(occurrences("- café 👩🏽‍💻", in: result), 1)
         XCTAssertTrue(result.contains("- café 👩🏽‍💻\n  - 子项"))
-        XCTAssertTrue(result.contains("- café 👩🏽‍💻\n  - 新子项 🧑🏽‍💻"))
+        XCTAssertTrue(result.contains("  - 新子项 🧑🏽‍💻"))
         XCTAssertEqual(occurrences("结尾", in: result), 1)
     }
 
@@ -76,6 +74,85 @@ final class SyncMergeTests: XCTestCase {
         let result = SyncMerge.combine(local: "# Note\n" + shared + "\nLocal", remote: "# Note\n" + shared + "\nRemote").text
         XCTAssertEqual(occurrences(shared, in: result), 1)
         XCTAssertTrue(result.contains("Local")); XCTAssertTrue(result.contains("Remote"))
+    }
+
+    func testFlomoSpacingDoesNotDuplicateParentsChildrenOrFollowingParagraphs() {
+        let local = "# Notes\n- Parent\n - Shared child\n - Local child\n- Other item\n- -\n\n### Project\n- Local note\n**Shared evaluation**\nShared paragraph\n- Parent two\n - Shared child two"
+        let remote = "# Notes\n- Parent\n  - Shared child\n- Other item\n\n  -\n\n### Project\n- Remote note\n\n  **Shared evaluation**\n\n  Shared paragraph\n- Parent two\n\n  - Shared child two"
+        let result = SyncMerge.combine(local: local, remote: remote).text
+        for shared in ["- Parent\n", "Shared child\n", "Other item", "**Shared evaluation**", "Shared paragraph", "Parent two", "Shared child two"] {
+            XCTAssertEqual(occurrences(shared, in: result), 1, shared)
+        }
+        XCTAssertTrue(result.contains("Local child")); XCTAssertTrue(result.contains("Local note")); XCTAssertTrue(result.contains("Remote note"))
+        XCTAssertEqual(SyncMerge.combine(local: result, remote: remote).text, result)
+    }
+
+    func testNestedListMergesMatchingParentsAndKeepsDifferentParentsDistinct() {
+        let local = "- A\n - Child\n  - Deep shared\n - Local sibling\n- B\n - Child"
+        let remote = "- A\n  - Child\n    - Deep shared\n    - Deep remote\n  - Remote sibling\n- B\n  - Child\n  - Remote B"
+        let result = SyncMerge.combine(local: local, remote: remote).text
+        XCTAssertEqual(occurrences("- A", in: result), 1)
+        XCTAssertEqual(occurrences("- Child", in: result), 2)
+        XCTAssertEqual(occurrences("Deep shared", in: result), 1)
+        for unique in ["Deep remote", "Local sibling", "Remote sibling", "Remote B"] { XCTAssertEqual(occurrences(unique, in: result), 1) }
+        XCTAssertEqual(SyncMerge.combine(local: result, remote: local).text, result)
+        XCTAssertEqual(SyncMerge.combine(local: result, remote: remote).text, result)
+    }
+
+    func testKnownReadbackEscapesDoNotDuplicateMarkedUpLines() {
+        let local = "### Project\n**Shared**-detail\nfile~name\nLocal"
+        let remote = "### Project\n  **Shared**\\-detail\n  file\\~name\nRemote"
+        let result = SyncMerge.combine(local: local, remote: remote).text
+        XCTAssertEqual(occurrences("**Shared**", in: result), 1)
+        XCTAssertEqual(occurrences("file", in: result), 1)
+        XCTAssertTrue(result.contains("Local")); XCTAssertTrue(result.contains("Remote"))
+    }
+
+    func testMovedTreesWithRepeatedParentNamesDoNotMixChildren() {
+        for prefix in ["", "- Root\n"] {
+            let indent = prefix.isEmpty ? "" : "  "
+            let local = prefix + ["- A", "  - X", "- A", "  - Y"].map { indent + $0 }.joined(separator: "\n")
+            let remote = prefix + ["- A", "  - Y", "- A", "  - X"].map { indent + $0 }.joined(separator: "\n")
+            XCTAssertEqual(SyncMerge.combine(local: local, remote: remote).text, local)
+        }
+    }
+
+    func testReadbackIndentOnFollowingParagraphDoesNotAddAContinuationCopy() {
+        for (local, remote) in [("- Task\nFollowing paragraph", "- Task\n  Following paragraph"),
+                                 ("- Task\n  Following paragraph", "- Task\nFollowing paragraph")] {
+            let result = SyncMerge.combine(local: local, remote: remote).text
+            XCTAssertEqual(result, local)
+            XCTAssertEqual(occurrences("Following paragraph", in: result), 1)
+        }
+        let repeated = SyncMerge.combine(local: "- Task\nParagraph", remote: "- Task\n  Paragraph\n  Paragraph").text
+        XCTAssertEqual(occurrences("Paragraph", in: repeated), 2, "Keep repetitions that exist within a source")
+        for separator in ["\n", "\n\n"] {
+            let split = "- Task\n  Paragraph" + separator + "Paragraph"
+            XCTAssertEqual(occurrences("Paragraph", in: SyncMerge.combine(local: "- Task\nParagraph", remote: split).text), 2)
+            XCTAssertEqual(occurrences("Paragraph", in: SyncMerge.combine(local: split, remote: "- Task\nParagraph").text), 2)
+        }
+    }
+
+    func testCapturedMergeHasNoIntroducedDuplicateLines() throws {
+        guard let directory = ProcessInfo.processInfo.environment["ISLAND_NOTE_MERGE_CAPTURE_DIR"] else { return }
+        let folder = URL(fileURLWithPath: directory)
+        let local = try String(contentsOf: folder.appendingPathComponent("local.md"), encoding: .utf8)
+        let remote = SyncDocument.fromFlomo(try String(contentsOf: folder.appendingPathComponent("remote.md"), encoding: .utf8))
+        let result = SyncMerge.combine(local: local, remote: remote).text
+        func counts(_ text: String) -> [String: Int] {
+            var result: [String: Int] = [:]
+            for line in text.components(separatedBy: "\n") {
+                let key = SyncDocument.comparisonKey(line.trimmingCharacters(in: .whitespaces))
+                if !key.isEmpty { result[key, default: 0] += 1 }
+            }
+            return result
+        }
+        let left = counts(local), right = counts(remote), merged = counts(result)
+        for (index, key) in Set(left.keys).union(right.keys).sorted().enumerated() {
+            XCTAssertEqual(merged[key, default: 0], max(left[key, default: 0], right[key, default: 0]), "Source unit \(index) duplicated or missing")
+        }
+        try result.write(to: folder.appendingPathComponent("corrected.md"), atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: folder.appendingPathComponent("corrected.md").path)
     }
 
     func testInlineMarkdownAndHardBreaksRemainWhole() {
@@ -176,6 +253,16 @@ final class SyncMergeTests: XCTestCase {
         XCTAssertTrue(result.hasSuffix("Remote 749"))
         XCTAssertEqual(occurrences("Local ", in: result), 750)
         XCTAssertEqual(occurrences("Remote ", in: result), 750)
+    }
+
+    func testDeepListFingerprintRemainsBounded() {
+        let tree = (0..<100).map { String(repeating: " ", count: $0 * 2) + "- Level \($0)" }.joined(separator: "\n")
+        let start = Date()
+        let result = SyncMerge.combine(local: tree + "\nLocal tail", remote: tree + "\nRemote tail").text
+        XCTAssertTrue(result.contains(tree))
+        XCTAssertEqual(occurrences("- Level ", in: result), 100)
+        XCTAssertTrue(result.contains("Local tail")); XCTAssertTrue(result.contains("Remote tail"))
+        XCTAssertLessThan(Date().timeIntervalSince(start), 3)
     }
 
     private func occurrences(_ needle: String, in text: String) -> Int {
