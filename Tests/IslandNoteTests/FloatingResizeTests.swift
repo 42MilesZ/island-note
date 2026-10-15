@@ -477,37 +477,72 @@ final class FloatingResizeTests: XCTestCase {
         }
     }
 
-    func testSettingsProtectDockedAndFloatingPanelFromAutomaticCollapse() throws {
+    func testSettingsRetractDockedAndFloatingPanelAndDoNotCancelQueuedCollapse() throws {
         try withPanel { controller, panel, editor, _ in
             let initial = editor.frame
             controller.collapse(automatically: true)
-            // Settings opens before an already queued collapse can flush the editor.
+            // Opening a window must not cancel an already queued mouse-exit collapse.
             controller.showSettings()
-            settle(0.2)
-            let settings = try XCTUnwrap(NSApp.windows.first { $0.windowController is SettingsWindowController })
+            settle(0.3)
+            let settings = try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.windowController is SettingsWindowController })
             defer { settings.close() }
-            XCTAssertFalse(editor.isHidden)
-            XCTAssertEqual(editor.frame, initial)
-            let click = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: NSPoint(x: 40, y: 40),
-                modifierFlags: [], timestamp: 0, windowNumber: settings.windowNumber, context: nil,
-                eventNumber: 0, clickCount: 1, pressure: 1))
-            NSApp.sendEvent(click)
-            controller.collapse(automatically: true)
-            settle(0.2)
-            XCTAssertFalse(editor.isHidden)
-            settings.close()
-            controller.collapse(automatically: true); settle(1.1)
             XCTAssertTrue(editor.isHidden)
-            controller.expand(); settle(1.1)
+            XCTAssertEqual(controller.mode, .rest)
+            XCTAssertEqual(editor.frame, initial)
+            let hover = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved,
+                location: NSPoint(x: initial.midX, y: initial.maxY - 15), modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+            NSApp.sendEvent(hover); settle(0.1)
+            XCTAssertEqual(controller.mode, .rest, "Hover must not reopen the note over Settings")
+            settings.close()
+            NSApp.sendEvent(hover); settle(1.1)
+            XCTAssertEqual(controller.mode, .expanded, "Normal hover opening returns after Settings closes")
             let start = header(panel, editor), out = NSPoint(x: header(panel, editor).x + 80, y: header(panel, editor).y - 170)
             editor.dragHandle.onBegin?(start); editor.dragHandle.onMove?(out); editor.dragHandle.onEnd?(out)
             settle()
-            let floating = screenRect(panel, editor)
-            controller.showSettings(); settle(0.5)
-            XCTAssertFalse(editor.isHidden)
-            XCTAssertEqual(screenRect(panel, editor), floating)
-            XCTAssertEqual(panel.level, .floating)
+            controller.collapse(automatically: true); settle(0.1)
+            XCTAssertFalse(editor.isHidden, "Ordinary mouse exits still keep a floating note open")
+            controller.showSettings(); settle(1.1)
+            XCTAssertTrue(editor.isHidden)
+            XCTAssertEqual(controller.mode, .rest)
+            XCTAssertEqual(panel.level, .screenSaver)
             settings.close()
+        }
+    }
+
+    func testConflictConfirmationRetractsNoteAndKeepsItRetractedUntilClosed() throws {
+        try withPanel { controller, panel, editor, _ in
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("island-review-" + UUID().uuidString)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let url = folder.appendingPathComponent("sync.json")
+            try JSONEncoder().encode(SyncRecord(enabled: true, memoID: "fixture", baseline: "Base", remoteBaseline: "Base")).write(to: url)
+            let sync = try FlomoSync(stateURL: url)
+            defer { sync.stop() }
+            sync.readLocal = { editor.string }
+            sync.start(client: ConflictReviewClient())
+            settle(0.2)
+            _ = try XCTUnwrap(sync.conflict)
+            sync.pause()
+            let initial = editor.frame
+            controller.collapse(automatically: true)
+            controller.presentSyncSettings(sync)
+            settle(0.3)
+            let review = try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.windowController is FlomoConflictWindowController })
+            defer { review.close() }
+            XCTAssertTrue(editor.isHidden)
+            XCTAssertEqual(controller.mode, .rest)
+            let hover = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved,
+                location: NSPoint(x: initial.midX, y: initial.maxY - 15), modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+            NSApp.sendEvent(hover); settle(0.1)
+            XCTAssertEqual(controller.mode, .rest)
+            review.performClose(nil); settle(0.2)
+            XCTAssertEqual(controller.mode, .rest, "Closing confirmation must not reopen the note")
+            NSApp.sendEvent(hover); settle(0.8)
+            XCTAssertEqual(controller.mode, .expanded)
         }
     }
 
@@ -609,5 +644,19 @@ final class FloatingResizeTests: XCTestCase {
             XCTAssertTrue(text.isVerticallyResizable)
             print("Document-end resize fixture: mean \(durations.reduce(0, +) / Double(durations.count) * 1000) ms, max \(durations.max()! * 1000) ms")
         }
+    }
+}
+
+@MainActor
+private final class ConflictReviewClient: FlomoServing {
+    func fetch(id: String) async throws -> FlomoMemo {
+        FlomoMemo(id: id, content: "Remote fixture", updatedAt: "v1")
+    }
+    func create(content: String) async throws -> String {
+        XCTFail("Review must not create a memo")
+        return "fixture"
+    }
+    func update(id: String, content: String, updatedAt: String) async throws {
+        XCTFail("Review must not update a memo")
     }
 }

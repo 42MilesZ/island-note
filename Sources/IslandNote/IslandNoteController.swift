@@ -917,7 +917,8 @@ final class IslandNoteController: NSObject {
     // MARK: - 悬停 / 点击
 
     private func handleHover(_ event: NSEvent? = nil) {
-        guard !settingsKeepPanelOpen, !dragInteraction.preventsCollapse else { return }
+        guard !dragInteraction.preventsCollapse else { return }
+        guard mode == .expanded || !isAuxiliaryWindowOpen else { return }
         // Shrinking can move the edge past a stationary pointer. Wait for the
         // gesture/animation to finish before accepting a new hover-exit movement.
         guard !isPinching, resizeTimer == nil else { return }
@@ -932,7 +933,7 @@ final class IslandNoteController: NSObject {
                 let work = DispatchWorkItem { [weak self] in
                     guard let self else { return }
                     self.pendingCollapse = nil
-                    if self.mode == .expanded, !self.settingsKeepPanelOpen, !self.dragInteraction.preventsCollapse,
+                    if self.mode == .expanded, !self.dragInteraction.preventsCollapse,
                        !self.screenRect(self.rect(for: .expanded)).insetBy(dx: -6, dy: -4).contains(NSEvent.mouseLocation) {
                         self.collapse(automatically: true)
                     }
@@ -954,7 +955,8 @@ final class IslandNoteController: NSObject {
     }
 
     private func handleClick(_ e: NSEvent?) {
-        guard !settingsKeepPanelOpen, !dragInteraction.preventsCollapse else { return }
+        guard !dragInteraction.preventsCollapse else { return }
+        guard mode == .expanded || !isAuxiliaryWindowOpen else { return }
         let loc = screenPoint(for: e)
         switch mode {
         case .expanded:
@@ -1008,7 +1010,7 @@ final class IslandNoteController: NSObject {
     }
 
     @objc func showSettings() {
-        pendingCollapse?.cancel(); pendingCollapse = nil
+        collapse()
         if settingsWindow == nil {
             let settings = SettingsWindowController(preferences: preferences, diagnostics: diagnostics)
             settings.onFlomoToggle = { [weak self] in self?.setFlomoEnabled($0) ?? false }
@@ -1190,13 +1192,13 @@ final class IslandNoteController: NSObject {
         }
     }
 
-    private var settingsKeepPanelOpen: Bool {
+    private var isAuxiliaryWindowOpen: Bool {
         showingSyncSettings || syncSettingsInFlight || PrivacyPolicyWindow.isVisible
     }
 
     func collapse(automatically: Bool = false) {
-        guard !automatically || !settingsKeepPanelOpen else { return }
         if dragInteraction.preventsCollapse {
+            guard !automatically else { return }
             dragInteraction.cancelAndDock(collapse: true)
             return
         }
@@ -1210,8 +1212,7 @@ final class IslandNoteController: NSObject {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.finishingCollapse = false
-            guard self.mode == .expanded, !self.dragInteraction.preventsCollapse,
-                  !automatically || !self.settingsKeepPanelOpen else { return }
+            guard self.mode == .expanded, !self.dragInteraction.preventsCollapse else { return }
             self.editor.flushPending()
             guard self.store.flushSync() else { return }
             self.goTo(.rest)
@@ -1272,9 +1273,16 @@ final class IslandNoteController: NSObject {
     @objc func showSyncSettings() {
         guard !syncSettingsInFlight else { return }
         guard preferences.flomoEnabled else { showSettings(); return }
-        guard let sync else { FlomoSettings.error(L10n.tr("Sync settings could not be loaded. Your local note is still available.")); return }
-        pendingCollapse?.cancel()
-        pendingCollapse = nil
+        guard let sync else {
+            collapse()
+            FlomoSettings.error(L10n.tr("Sync settings could not be loaded. Your local note is still available.")); return
+        }
+        presentSyncSettings(sync)
+    }
+
+    func presentSyncSettings(_ sync: FlomoSync) {
+        guard !syncSettingsInFlight else { return }
+        collapse()
         editor.flushPending()
         guard store.flushSync() else { return }
         syncSettingsInFlight = true
