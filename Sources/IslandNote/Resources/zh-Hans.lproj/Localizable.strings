@@ -292,6 +292,9 @@
 "Saving Flomo changes to the local document…" = "正在将 Flomo 的修改保存到本地文档…";
 
 // Sync comparison
+"Synchronized scrolling" = "同步滚动";
+"Unlock scrolling" = "解锁滚动";
+"Lock scrolling" = "锁定滚动";
 "Choose the copy to keep" = "选择要保留的版本";
 "The last upload could not be confirmed. Compare both copies before continuing." = "上次上传尚未确认，请核对两份内容后继续。";
 "These notes have different text. Choose one, or keep both in the same memo." = "两份笔记内容不同，可选择一份，或合并到同一条笔记。";

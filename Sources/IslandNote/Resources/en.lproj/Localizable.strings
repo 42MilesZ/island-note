@@ -292,6 +292,9 @@
 "Saving Flomo changes to the local document…" = "Saving Flomo changes to the local document…";
 
 // Sync comparison
+"Synchronized scrolling" = "Synchronized scrolling";
+"Unlock scrolling" = "Unlock scrolling";
+"Lock scrolling" = "Lock scrolling";
 "Choose the copy to keep" = "Choose the copy to keep";
 "The last upload could not be confirmed. Compare both copies before continuing." = "The last upload could not be confirmed. Compare both copies before continuing.";
 "These notes have different text. Choose one, or keep both in the same memo." = "These notes have different text. Choose one, or keep both in the same memo.";

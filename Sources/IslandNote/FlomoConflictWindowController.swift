@@ -13,6 +13,12 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
     private(set) var localButton: SettingsButton!
     private(set) var remoteButton: SettingsButton!
     private(set) var mergeButton: SettingsButton!
+    private(set) var scrollLockButton: SettingsButton!
+    private(set) var isScrollLocked = true
+    private var synchronizingScroll = false
+    private weak var lastScrolledView: NSScrollView?
+    private var scrollBounds: [ObjectIdentifier: NSRect] = [:]
+    private var scrollObservations: [NSObjectProtocol] = []
     private let logger = Logger(subsystem: "local.projects.island-note", category: "SyncReview")
 
     convenience init(conflict: SyncConflict, sync: FlomoSync) {
@@ -34,6 +40,7 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
         super.init(window: window)
         window.delegate = self
         build(conflict: conflict, phase: phase, lastVerifiedAt: lastVerifiedAt, canChoose: canChoose, canMerge: canMerge, reviewError: reviewError)
+        observeScrolling()
         window.center()
     }
 
@@ -54,6 +61,7 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
     /// scrolling through a long copy. Resize still uses native text reflow.
     func prepareTextLayout() {
         let start = ProcessInfo.processInfo.systemUptime
+        synchronizingScroll = true
         window?.contentView?.layoutSubtreeIfNeeded()
         for scroll in [localScroll!, remoteScroll!] {
             guard let view = scroll.documentView as? NSTextView, let container = view.textContainer else { continue }
@@ -61,6 +69,20 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
             view.layoutManager?.ensureLayout(for: container)
             view.sizeToFit()
         }
+        // Keep a fresh comparison at its beginning while AppKit settles insets.
+        if isScrollLocked && lastScrolledView == nil {
+            for scroll in [localScroll!, remoteScroll!] {
+                let clip = scroll.contentView
+                clip.scroll(to: NSPoint(x: clip.bounds.minX, y: clip.documentRect.minY))
+                scroll.reflectScrolledClipView(clip)
+            }
+        }
+        // AppKit can coalesce bounds notifications during initial layout.
+        for scroll in [localScroll!, remoteScroll!] {
+            scrollBounds[ObjectIdentifier(scroll)] = scroll.contentView.bounds
+        }
+        synchronizingScroll = false
+        if isScrollLocked { synchronizeScroll(from: lastScrolledView ?? localScroll) }
         let duration = (ProcessInfo.processInfo.systemUptime - start) * 1000
         logger.info("Comparison layout prepared in \(duration, format: .fixed(precision: 2), privacy: .public) ms")
     }
@@ -71,7 +93,21 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
         window.contentView = root
         let header = NSStackView()
         header.orientation = .vertical; header.alignment = .leading; header.spacing = 10
-        header.addArrangedSubview(label("Choose the copy to keep", size: 26))
+        let title = label("Choose the copy to keep", size: 26)
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        scrollLockButton = SettingsButton(title: "", target: self, action: #selector(toggleScrollLock))
+        scrollLockButton.setButtonType(.pushOnPushOff)
+        scrollLockButton.state = .on
+        scrollLockButton.imagePosition = .imageOnly
+        scrollLockButton.widthAnchor.constraint(equalToConstant: 36).isActive = true
+        scrollLockButton.setAccessibilityIdentifier("syncReview.scrollLock")
+        scrollLockButton.setAccessibilityLabel(L10n.tr("Synchronized scrolling"))
+        scrollLockButton.setAccessibilityRole(.checkBox)
+        updateScrollLockAppearance(animated: false)
+        let titleRow = NSStackView(views: [title, NSView(), scrollLockButton])
+        titleRow.orientation = .horizontal; titleRow.alignment = .centerY; titleRow.spacing = 16
+        header.addArrangedSubview(titleRow)
+        titleRow.widthAnchor.constraint(equalTo: header.widthAnchor).isActive = true
         let explanation: String
         switch phase {
         case .connectionFailed, .offline, .authorizationRequired:
@@ -208,6 +244,74 @@ final class FlomoConflictWindowController: NSWindowController, NSWindowDelegate 
         // An offset-free service timestamp has no known timezone. Show its
         // original representation rather than inventing an absolute date.
         return value
+    }
+
+    private func observeScrolling() {
+        for scroll in [localScroll!, remoteScroll!] {
+            let clip = scroll.contentView
+            scrollBounds[ObjectIdentifier(scroll)] = clip.bounds
+            clip.postsBoundsChangedNotifications = true
+            scrollObservations.append(NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification, object: clip, queue: .main
+            ) { [weak self, weak scroll] _ in
+                MainActor.assumeIsolated {
+                    guard let self, let scroll else { return }
+                    let key = ObjectIdentifier(scroll)
+                    let bounds = scroll.contentView.bounds
+                    let previous = self.scrollBounds.updateValue(bounds, forKey: key)
+                    // A resized viewport is layout, not a new scroll leader.
+                    guard !self.synchronizingScroll, let previous, previous.size == bounds.size,
+                          previous.minY != bounds.minY else { return }
+                    self.lastScrolledView = scroll
+                    if self.isScrollLocked { self.synchronizeScroll(from: scroll) }
+                }
+            })
+        }
+    }
+
+    /// Match native vertical progress without another animation clock or text layout.
+    /// Clamp elastic overscroll so it cannot pull the other copy beyond its ends.
+    private func synchronizeScroll(from source: NSScrollView) {
+        guard !synchronizingScroll else { return }
+        let target = source === localScroll ? remoteScroll! : localScroll!
+        let from = source.contentView, to = target.contentView
+        let sourceRange = max(0, from.documentRect.height - from.bounds.height)
+        guard sourceRange > 0 else { return }
+        let progress = min(1, max(0, (from.bounds.minY - from.documentRect.minY) / sourceRange))
+        let targetRange = max(0, to.documentRect.height - to.bounds.height)
+        let y = to.documentRect.minY + progress * targetRange
+        guard abs(to.bounds.minY - y) > 0.01 else { return }
+        synchronizingScroll = true
+        defer { synchronizingScroll = false }
+        to.scroll(to: NSPoint(x: to.bounds.minX, y: y))
+        target.reflectScrolledClipView(to)
+    }
+
+    @objc private func toggleScrollLock() {
+        isScrollLocked = scrollLockButton.state == .on
+        updateScrollLockAppearance(animated: true)
+        if isScrollLocked { synchronizeScroll(from: lastScrolledView ?? localScroll) }
+        logger.info("Comparison scroll lock: \(self.isScrollLocked, privacy: .public)")
+    }
+
+    private func updateScrollLockAppearance(animated: Bool) {
+        if animated {
+            let transition = CATransition()
+            transition.type = .fade
+            transition.duration = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion ? 0.08 : 0.16
+            transition.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            scrollLockButton.layer?.add(transition, forKey: "scroll-lock-symbol")
+        }
+        scrollLockButton.image = NSImage(systemSymbolName: isScrollLocked ? "lock.fill" : "lock.open",
+                                        accessibilityDescription: nil)
+        scrollLockButton.toolTip = L10n.tr(isScrollLocked ? "Unlock scrolling" : "Lock scrolling")
+        scrollLockButton.setAccessibilityValue(isScrollLocked ? 1 : 0)
+    }
+
+    func windowDidEndLiveResize(_ notification: Notification) { prepareTextLayout() }
+
+    deinit {
+        for observation in scrollObservations { NotificationCenter.default.removeObserver(observation) }
     }
 
     @objc private func useLocal() { finish(.choose(.local)) }
