@@ -4,6 +4,13 @@ import XCTest
 
 @MainActor
 final class StatusIndicatorTrackingTests: XCTestCase {
+    func testStatusAcceptsFirstClickInAnInactivePanel() {
+        _ = NSApplication.shared
+        let button = StatusIndicatorButton(title: "", target: nil, action: nil)
+        button.isBordered = false
+        XCTAssertTrue(button.acceptsFirstMouse(for: nil))
+    }
+
     func testHoverUsesExpandedParentAreaAndLeavesClicksNative() throws {
         _ = NSApplication.shared
         let parent = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 80))

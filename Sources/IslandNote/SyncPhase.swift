@@ -29,7 +29,7 @@ enum SyncPhase: String, Codable, Equatable {
         }
     }
 
-    var hoverSummary: String {
+    var statusSummary: String {
         switch self {
         case .synced: return L10n.tr("Saved · Synced")
         case .checking: return L10n.tr("Saved · Checking sync")
@@ -38,18 +38,18 @@ enum SyncPhase: String, Codable, Equatable {
         case .paused: return L10n.tr("Saved · Sync paused")
         case .offline: return L10n.tr("Saved · Offline")
         case .disconnected: return L10n.tr("Local only · Connect Flomo")
-        case .mergeRequired: return L10n.tr("Merge needed · Click to review")
-        case .conflict: return L10n.tr("Conflicting edits · Click to review")
-        case .formattingChanged: return L10n.tr("Content differs · Click to review")
-        case .connectionFailed: return L10n.tr("Connection failed · Click to retry")
+        case .mergeRequired: return L10n.tr("Conflict")
+        case .conflict: return L10n.tr("Conflict")
+        case .formattingChanged: return L10n.tr("Content differs")
+        case .connectionFailed: return L10n.tr("Connection failed")
         case .authorizationRequired: return L10n.tr("Reconnect Flomo")
         case .rateLimited: return L10n.tr("Sync delayed · Retrying later")
-        case .unsupported: return L10n.tr("Unsupported format · View details")
-        case .tooLong: return L10n.tr("Note too long · View details")
-        case .verifyWrite: return L10n.tr("Verify sync · Click to review")
+        case .unsupported: return L10n.tr("Unsupported format")
+        case .tooLong: return L10n.tr("Note too long")
+        case .verifyWrite: return L10n.tr("Sync unconfirmed")
         case .recoverCreate: return L10n.tr("Link existing memo")
         case .localChanged: return L10n.tr("Local changes pending")
-        case .failed: return L10n.tr("Sync stopped · View details")
+        case .failed: return L10n.tr("Sync failed")
         }
     }
 
@@ -90,11 +90,11 @@ struct StatusPresentation: Equatable {
     let caption: String?
     let summary: String
 
-    init(local: LocalSaveState, phase: SyncPhase, flomoEnabled: Bool, hovered: Bool) {
+    init(local: LocalSaveState, phase: SyncPhase, flomoEnabled: Bool) {
         if case .failed = local {
             tone = .error
-            summary = L10n.tr("Not saved · Click for details")
-            caption = hovered ? summary : L10n.tr("Not saved")
+            summary = L10n.tr("Not saved")
+            caption = L10n.tr("Not saved")
             return
         }
         let effectivePhase = local != .saved && phase == .synced ? SyncPhase.waiting : phase
@@ -104,10 +104,10 @@ struct StatusPresentation: Equatable {
         else { tone = .neutral }
         if local == .loading { summary = L10n.tr("Loading note…") }
         else if local == .saving {
-            summary = flomoEnabled && effectivePhase.needsAction ? effectivePhase.hoverSummary
+            summary = flomoEnabled && effectivePhase.needsAction ? effectivePhase.statusSummary
                 : L10n.tr("Saving locally…")
-        } else { summary = flomoEnabled ? effectivePhase.hoverSummary : L10n.tr("Saved locally") }
+        } else { summary = flomoEnabled ? effectivePhase.statusSummary : L10n.tr("Saved locally") }
         let automatic = flomoEnabled ? effectivePhase.inlineStatus : nil
-        caption = hovered ? summary : automatic
+        caption = automatic
     }
 }

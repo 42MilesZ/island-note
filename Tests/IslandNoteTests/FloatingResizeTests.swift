@@ -59,6 +59,31 @@ final class FloatingResizeTests: XCTestCase {
             .write(to: URL(fileURLWithPath: directory).appendingPathComponent(name + ".png"))
     }
 
+    private func clickStatus(_ button: StatusIndicatorButton, in panel: NSPanel,
+                             fraction: CGFloat = 0.5, releaseOutside: Bool = false) throws {
+        let localPoint = NSPoint(x: button.bounds.width * fraction, y: button.bounds.midY)
+        let content = try XCTUnwrap(panel.contentView)
+        XCTAssertTrue(content.hitTest(button.convert(localPoint, to: content)) === button)
+        let point = button.convert(localPoint, to: nil)
+        let release = releaseOutside ? button.convert(NSPoint(x: button.bounds.maxX + 40, y: localPoint.y), to: nil) : point
+        let timestamp = ProcessInfo.processInfo.systemUptime
+        let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: point,
+            modifierFlags: [], timestamp: timestamp, windowNumber: panel.windowNumber,
+            context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+        let up = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseUp, location: release,
+            modifierFlags: [], timestamp: timestamp + 0.02, windowNumber: panel.windowNumber,
+            context: nil, eventNumber: 0, clickCount: 1, pressure: 0))
+        XCTAssertTrue(button.cell!.hitTest(for: down, in: button.bounds, of: button).contains(.trackableArea))
+        NSApp.postEvent(up, atStart: true)
+        if releaseOutside {
+            let drag = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDragged, location: release,
+                modifierFlags: [], timestamp: timestamp + 0.01, windowNumber: panel.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            NSApp.postEvent(drag, atStart: true)
+        }
+        NSApp.sendEvent(down)
+    }
+
     func testFloatingMorphEdgesCustomPinchAndSizeRecall() throws {
         try withPanel { controller, panel, editor, text in
             text.setSelectedRange(NSRange(location: 24, length: 9))
@@ -477,6 +502,41 @@ final class FloatingResizeTests: XCTestCase {
         }
     }
 
+    func testStatusBubbleReceivesNativeClicksAcrossItsVisibleWidth() throws {
+        try withPanel { _, panel, editor, _ in
+            editor.setFlomoEnabled(true)
+            editor.showSyncStatus(.verifyWrite, detail: "Review fixture")
+            editor.layoutSubtreeIfNeeded()
+            settle(0.3)
+            let button = try XCTUnwrap(find(StatusIndicatorButton.self, in: editor))
+            var clicks = 0
+            var highlights: [Bool] = []
+            let onHighlight = button.onHighlight
+            button.onHighlight = { highlights.append($0); onHighlight?($0) }
+            editor.onRequestSync = { clicks += 1 }
+            button.performClick(nil)
+            XCTAssertEqual(clicks, 1, "The action is wired")
+            clicks = 0
+            for fraction: CGFloat in [0.12, 0.5, 0.9] {
+                try clickStatus(button, in: panel, fraction: fraction)
+            }
+            XCTAssertEqual(clicks, 3)
+            XCTAssertTrue(highlights.contains(true), "Native tracking must show pressed feedback")
+            XCTAssertEqual(highlights.last, false)
+            try clickStatus(button, in: panel, releaseOutside: true)
+            XCTAssertEqual(clicks, 3, "Releasing outside the bubble cancels the click")
+            editor.showSyncStatus(.synced, detail: "Verified fixture")
+            settle(0.3)
+            try clickStatus(button, in: panel)
+            XCTAssertEqual(clicks, 4, "The compact status dot also opens sync management")
+            var settingsRequests = 0
+            editor.setFlomoEnabled(false)
+            editor.onRequestSettings = { settingsRequests += 1 }
+            try clickStatus(button, in: panel)
+            XCTAssertEqual(settingsRequests, 1)
+        }
+    }
+
     func testSettingsRetractDockedAndFloatingPanelAndDoNotCancelQueuedCollapse() throws {
         try withPanel { controller, panel, editor, _ in
             let initial = editor.frame
@@ -527,7 +587,12 @@ final class FloatingResizeTests: XCTestCase {
             sync.pause()
             let initial = editor.frame
             controller.collapse(automatically: true)
-            controller.presentSyncSettings(sync)
+            editor.setFlomoEnabled(true)
+            editor.showSyncStatus(.conflict, detail: "Conflict fixture")
+            editor.onRequestSync = { [weak controller, weak sync] in
+                if let sync { controller?.presentSyncSettings(sync) }
+            }
+            try clickStatus(try XCTUnwrap(find(StatusIndicatorButton.self, in: editor)), in: panel)
             settle(0.3)
             let review = try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.windowController is FlomoConflictWindowController })
             defer { review.close() }

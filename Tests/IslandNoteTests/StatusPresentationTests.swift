@@ -2,8 +2,8 @@ import XCTest
 @testable import IslandNote
 
 final class StatusPresentationTests: XCTestCase {
-    private func status(_ local: LocalSaveState, _ phase: SyncPhase, enabled: Bool = true, hovered: Bool = false) -> StatusPresentation {
-        StatusPresentation(local: local, phase: phase, flomoEnabled: enabled, hovered: hovered)
+    private func status(_ local: LocalSaveState, _ phase: SyncPhase, enabled: Bool = true) -> StatusPresentation {
+        StatusPresentation(local: local, phase: phase, flomoEnabled: enabled)
     }
 
     func testSuccessRequiresCurrentLocalVersionToBeSaved() {
@@ -11,7 +11,7 @@ final class StatusPresentationTests: XCTestCase {
         XCTAssertEqual(status(.saved, .disconnected, enabled: false).tone, .success)
         for local in [LocalSaveState.loading, .saving] {
             XCTAssertEqual(status(local, .synced).tone, .neutral)
-            XCTAssertNotEqual(status(local, .synced, hovered: true).summary, SyncPhase.synced.hoverSummary)
+            XCTAssertNotEqual(status(local, .synced).summary, SyncPhase.synced.statusSummary)
         }
         for phase in [SyncPhase.waiting, .paused, .disconnected, .offline, .rateLimited, .localChanged] {
             XCTAssertEqual(status(.saved, phase).tone, .neutral)
@@ -31,10 +31,8 @@ final class StatusPresentationTests: XCTestCase {
     }
 
     func testReadOnlyChecksStayCompactButTransfersExpandImmediately() {
-        XCTAssertNil(StatusPresentation(local: .saved, phase: .checking, flomoEnabled: true,
-                                        hovered: false).caption)
-        XCTAssertNotNil(StatusPresentation(local: .saved, phase: .syncing, flomoEnabled: true,
-                                           hovered: false).caption)
-        XCTAssertEqual(status(.saving, .syncing, hovered: true).summary, L10n.tr("Saving locally…"))
+        XCTAssertNil(StatusPresentation(local: .saved, phase: .checking, flomoEnabled: true).caption)
+        XCTAssertNotNil(StatusPresentation(local: .saved, phase: .syncing, flomoEnabled: true).caption)
+        XCTAssertEqual(status(.saving, .syncing).summary, L10n.tr("Saving locally…"))
     }
 }

@@ -107,9 +107,8 @@ final class NoteEditorView: NSView {
     private var motionObservation: NSObjectProtocol?
     private var compositionObservations: [NSObjectProtocol] = []
     private var isComposing = false
-    private var statusHoverWork: DispatchWorkItem?
     private var isStatusHovered = false
-    private var showsHoverStatus = false
+    private var isStatusPressed = false
     private let syncButton = StatusIndicatorButton(title: "", target: nil, action: nil)
     #if ISLAND_EVENT_PROBE && ISLAND_LAYER_DISPLAY
     private let syncLabel = ProbeTextLayer()
@@ -131,6 +130,7 @@ final class NoteEditorView: NSView {
     private var navigationTimer: Timer?
     private var scrollMonitor: Any?
     private let logger = Logger(subsystem: "local.projects.island-note", category: "Outline")
+    private let statusLogger = Logger(subsystem: "local.projects.island-note", category: "StatusControl")
 
     var motionIsReduced: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     var onTextChanged: ((String) -> Void)?
@@ -206,6 +206,11 @@ final class NoteEditorView: NSView {
         syncButton.font = .systemFont(ofSize: 11, weight: .medium)
         syncButton.appearance = NSAppearance(named: .darkAqua)
         syncButton.onHover = { [weak self] hovered in self?.setStatusHovered(hovered) }
+        syncButton.onHighlight = { [weak self] pressed in
+            guard let self else { return }
+            self.isStatusPressed = pressed
+            self.refreshStatusIndicator()
+        }
         syncButton.setAccessibilityLabel(L10n.tr("Local save status"))
         syncButton.wantsLayer = true
         syncButton.target = self
@@ -324,8 +329,7 @@ final class NoteEditorView: NSView {
     private func refreshStatusIndicator() {
         let phase = displayedSyncPhase
         let currentLocalState: LocalSaveState = isComposing && localSaveError == nil ? .saving : localSaveState
-        let presentation = StatusPresentation(local: currentLocalState, phase: phase, flomoEnabled: isFlomoEnabled,
-                                              hovered: showsHoverStatus)
+        let presentation = StatusPresentation(local: currentLocalState, phase: phase, flomoEnabled: isFlomoEnabled)
         let localDetail: String
         switch currentLocalState {
         case .loading: localDetail = L10n.tr("Loading note…")
@@ -486,34 +490,20 @@ final class NoteEditorView: NSView {
         if syncLabel.foregroundColor != tint.cgColor {
             SettingsPalette.animate(syncLabel, key: "foregroundColor", value: tint.cgColor, duration: 0.24)
         }
-        let background = tint.withAlphaComponent(expanded ? 0.10 : 0)
+        let background = tint.withAlphaComponent(isStatusPressed ? 0.24 : isStatusHovered ? 0.18 : expanded ? 0.10 : 0)
         if buttonLayer.backgroundColor != background.cgColor {
             SettingsPalette.animate(buttonLayer, key: "backgroundColor", value: background.cgColor, duration: 0.24)
         }
     }
 
     private func setStatusHovered(_ hovered: Bool) {
-        isStatusHovered = hovered
-        statusHoverWork?.cancel()
-        if hovered {
-            guard !isHiddenOrHasHiddenAncestor else { return }
-            let work = DispatchWorkItem { [weak self] in
-                guard let self, self.isStatusHovered, !self.isHiddenOrHasHiddenAncestor else { return }
-                self.showsHoverStatus = true
-                self.refreshStatusIndicator()
-            }
-            statusHoverWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
-        } else {
-            showsHoverStatus = false
-            refreshStatusIndicator()
-        }
+        isStatusHovered = hovered && !isHiddenOrHasHiddenAncestor
+        refreshStatusIndicator()
     }
 
     private func clearStatusHover() {
-        statusHoverWork?.cancel()
         isStatusHovered = false
-        showsHoverStatus = false
+        isStatusPressed = false
         refreshStatusIndicator()
     }
 
@@ -749,7 +739,6 @@ final class NoteEditorView: NSView {
     }
 
     deinit {
-        statusHoverWork?.cancel()
         if let motionObservation { NSWorkspace.shared.notificationCenter.removeObserver(motionObservation) }
         for observation in compositionObservations { NotificationCenter.default.removeObserver(observation) }
         outlineRefresh?.cancel()
@@ -851,6 +840,7 @@ final class NoteEditorView: NSView {
     @objc private func applyItalic() { NotificationCenter.default.post(name: .islandNoteItalic, object: nil) }
     @objc private func quitFromMenu() { onRequestQuit?() }
     @objc private func openSyncSettings() {
+        statusLogger.info("Status control activated")
         clearStatusHover()
         if let localSaveError {
             let alert = NSAlert()
