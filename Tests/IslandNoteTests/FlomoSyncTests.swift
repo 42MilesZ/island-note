@@ -15,6 +15,7 @@ private final class FakeFlomo: FlomoServing {
     var beforeFetch: (() async -> Void)?
     var onUpdate: (() -> Void)?
     var changeOnWrite = false
+    var readbackTransform: ((String) -> String)?
     func fetch(id: String) async throws -> FlomoMemo {
         fetches += 1
         await beforeFetch?()
@@ -33,7 +34,7 @@ private final class FakeFlomo: FlomoServing {
         updates += 1
         if let updateError { throw updateError }
         XCTAssertEqual(updatedAt, memo.updatedAt)
-        memo = FlomoMemo(id: id, content: changeOnWrite ? "Changed formatting" : content, updatedAt: "v2")
+        memo = FlomoMemo(id: id, content: changeOnWrite ? "Changed formatting" : (readbackTransform?(content) ?? content), updatedAt: "v2")
         onUpdate?()
     }
 }
@@ -213,6 +214,54 @@ final class FlomoSyncTests: XCTestCase {
         await sync.synchronize(choice: .remote, reviewed: reviewed)
         XCTAssertEqual(local, "Second remote change")
         sync.pause()
+    }
+
+    func testChoosingLocalAcceptsFlomoInlinePlusEscapeAndStaysResolved() async throws {
+        let (sync, url) = try make()
+        defer { sync.stop() }
+        let client = FakeFlomo()
+        let local = "- 技术创新 + 重新定义 = 颠覆式创新"
+        client.memo = FlomoMemo(id: "test", content: "Remote edit", updatedAt: "v2")
+        client.readbackTransform = { $0.replacingOccurrences(of: " + ", with: " \\+ ") }
+        sync.readLocal = { local }
+        sync.start(client: client)
+        await sync.synchronize()
+        let reviewed = try XCTUnwrap(sync.conflict)
+        await sync.synchronize(choice: .local, reviewed: reviewed)
+        XCTAssertEqual(client.updates, 1)
+        XCTAssertEqual(sync.phase, .synced)
+        XCTAssertNil(sync.conflict)
+        XCTAssertNil(sync.record.pendingWrite)
+        XCTAssertNil(sync.record.reviewPhase)
+        await sync.synchronize()
+        XCTAssertEqual(sync.phase, .synced)
+        XCTAssertEqual(client.updates, 1)
+        XCTAssertNil(try FlomoSync(stateURL: url).record.reviewPhase)
+    }
+
+    func testInlinePlusEscapeDoesNotHideChangedWordsOrListStructure() {
+        XCTAssertTrue(SyncDocument.equivalent(local: "技术创新 + 重新定义", remote: "技术创新 \\+ 重新定义"))
+        XCTAssertFalse(SyncDocument.equivalent(local: "技术创新 + 重新定义", remote: "技术创新 \\+ 不同文字"))
+        XCTAssertFalse(SyncDocument.equivalent(local: "+ List item", remote: "\\+ List item"))
+        XCTAssertFalse(SyncDocument.equivalent(local: "- Parent\n  + Child", remote: "- Parent\n+ Child"))
+    }
+
+    func testPendingUploadWithEscapedInlinePlusRecoversWithoutAnotherWrite() async throws {
+        let local = "- 技术创新 + 重新定义 = 颠覆式创新"
+        let (sync, _) = try make(SyncRecord(enabled: true, memoID: "test", baseline: "Base", remoteBaseline: "Base",
+                                          pendingWrite: local, pendingEncodedContent: SyncDocument.toFlomo(local),
+                                          pendingRemoteBaseline: "Remote edit", pendingRemoteVersion: "v1", reviewPhase: .verifyWrite))
+        defer { sync.stop() }
+        let client = FakeFlomo()
+        client.memo = FlomoMemo(id: "test", content: "- 技术创新 \\+ 重新定义 = 颠覆式创新", updatedAt: "v2")
+        sync.readLocal = { local }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(sync.phase, .synced)
+        XCTAssertNil(sync.conflict)
+        XCTAssertNil(sync.record.pendingWrite)
+        XCTAssertNil(sync.record.reviewPhase)
+        XCTAssertEqual(client.updates, 0)
     }
 
     func testEditWhileFetchingIsNotOverwritten() async throws {

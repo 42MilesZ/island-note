@@ -120,6 +120,10 @@ enum SyncDocument {
             // adds escapes to hyphens immediately following bold spans.
             compared = compared.replacingOccurrences(of: #"(?<=[\p{L}\p{N}_])\\~(?=[\p{L}\p{N}_])"#, with: "~", options: .regularExpression)
             compared = compared.replacingOccurrences(of: #"(?<=[^\\\s])\\-"#, with: "-", options: .regularExpression)
+            // Flomo escapes an inline plus surrounded by spaces. It is literal
+            // punctuation here; a leading escaped plus must remain distinct
+            // from a list marker, and words on either side still match exactly.
+            compared = compared.replacingOccurrences(of: #"(\S[ \t]+)\\\+(?=[ \t])"#, with: "$1+", options: .regularExpression)
             return unwrapBareURLs(in: compared)
         }
     }
