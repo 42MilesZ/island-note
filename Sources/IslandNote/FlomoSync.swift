@@ -190,6 +190,21 @@ final class FlomoSync {
                 try confirmMatchingCopies(local: local, remote: remote)
                 return
             }
+            let remoteText = SyncDocument.fromFlomo(remote.content)
+            if record.reviewPhase != nil, record.pendingMerge == nil, !record.creationUncertain {
+                try confirmPendingUpload(remoteText: remoteText)
+                let direction = SyncComparison.direction(baseline: record.baseline, remoteBaseline: record.remoteBaseline,
+                                                         local: local, remote: remoteText)
+                if record.pendingWrite == nil, direction != .conflict {
+                    record.reviewPhase = nil
+                    try persist()
+                    conflict = nil
+                    logger.info("Stale review cleared: only one copy changed; normal sync queued")
+                    report("Local edits are waiting to sync after typing stops.", phase: .waiting)
+                    localChanged()
+                    return
+                }
+            }
             showConflict(local: local, remote: remote, message: "Review the latest local and Flomo copies before continuing.",
                          phase: record.reviewPhase ?? .conflict)
         } catch {
@@ -345,16 +360,9 @@ final class FlomoSync {
                 try persist()
             }
             var repairLegacyUpload = false
+            try confirmPendingUpload(remoteText: remoteText)
             if let pending = record.pendingWrite {
-                if SyncDocument.equivalent(local: pending, remote: remoteText) {
-                    record.remoteBaseline = remoteText
-                    record.baseline = pending
-                    record.pendingWrite = nil
-                    record.pendingEncodedContent = nil
-                    record.pendingRemoteBaseline = nil
-                    record.pendingRemoteVersion = nil
-                    try persist()
-                } else if SyncDocument.equivalent(local: local, remote: remoteText) {
+                if SyncDocument.equivalent(local: local, remote: remoteText) {
                     // Both current copies converged after an older uncertain
                     // write. Verifying the current text resolves that intent.
                     try confirmMatchingCopies(local: rawLocal, remote: remote)
@@ -384,6 +392,7 @@ final class FlomoSync {
             }
 
             var direction = repairLegacyUpload ? .push : SyncComparison.direction(baseline: record.baseline, remoteBaseline: record.remoteBaseline, local: local, remote: remoteText)
+            logger.info("Sync comparison: direction=\(String(describing: direction), privacy: .public), pendingWrite=\(self.record.pendingWrite != nil), pendingMerge=\(self.record.pendingMerge != nil)")
             if let choice {
                 direction = choice == .local ? .push : .pull
             }
@@ -535,6 +544,17 @@ final class FlomoSync {
         try persist()
         conflict = nil
         report("Both copies are up to date.", phase: .synced)
+    }
+
+    private func confirmPendingUpload(remoteText: String) throws {
+        guard record.pendingMerge == nil, let pending = record.pendingWrite,
+              SyncDocument.equivalent(local: pending, remote: remoteText) else { return }
+        record.baseline = pending
+        record.remoteBaseline = remoteText
+        record.pendingWrite = nil
+        record.pendingEncodedContent = nil
+        try persist()
+        logger.info("Pending upload verified against remote content; preserved newer local edits")
     }
 
     private func settleEditorUpdates() async {

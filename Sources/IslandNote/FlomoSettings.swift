@@ -7,7 +7,7 @@ enum FlomoSettings {
         if refreshReview, sync.record.enabled, [.conflict, .mergeRequired, .formattingChanged, .verifyWrite].contains(sync.phase) {
             await sync.prepareReview()
             guard !sync.isStopped else { return }
-            if sync.phase == .synced, sync.conflict == nil { return }
+            if [.synced, .waiting].contains(sync.phase), sync.conflict == nil { return }
         }
         if !sync.requiresReconnection, let conflict = sync.conflict {
             let review = FlomoConflictWindowController(conflict: conflict, sync: sync)

@@ -41,6 +41,92 @@ private final class FakeFlomo: FlomoServing {
 
 @MainActor
 final class FlomoSyncTests: XCTestCase {
+    func testHTMLBreakOnlyNoteCannotCreateOrEraseRemote() async throws {
+        for text in ["<br>", "<br />\n<br>"] {
+            for memoID: String? in [nil, "test"] {
+                let (sync, _) = try make(SyncRecord(enabled: true, memoID: memoID, baseline: "Base", remoteBaseline: "Base"))
+                let client = FakeFlomo()
+                sync.readLocal = { text }
+                sync.start(client: client)
+                await sync.synchronize()
+                XCTAssertEqual(client.updates, 0)
+                XCTAssertEqual(client.creates, 0)
+                XCTAssertEqual(client.memo.content, "Base")
+                sync.stop()
+            }
+        }
+    }
+    func testOldUnconfirmedUploadWithExtraHTMLBreaksResumesAfterRestart() async throws {
+        let pending = "Books:<br><br>\nAuthor<br>"
+        let (sync, url) = try make(SyncRecord(enabled: true, memoID: "test", baseline: "Old", remoteBaseline: "Old",
+                                             pendingWrite: pending, pendingEncodedContent: pending,
+                                             pendingRemoteBaseline: "Old", pendingRemoteVersion: "v1", reviewPhase: .verifyWrite))
+        defer { sync.stop() }
+        let client = FakeFlomo()
+        client.memo = FlomoMemo(id: "test", content: "Books:<br><br><br>\nAuthor<br>", updatedAt: "2026-10-26T22:30:26+08:00")
+        sync.readLocal = { "Today's shorter note" }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(client.updates, 1)
+        XCTAssertEqual(client.memo.content, "Today's shorter note")
+        XCTAssertEqual(sync.phase, .synced)
+        XCTAssertNil(sync.conflict)
+        XCTAssertNil(try FlomoSync(stateURL: url).record.pendingWrite)
+    }
+
+    func testExtraHTMLBreaksDoNotHideRealRemoteEdit() async throws {
+        let (sync, _) = try make(SyncRecord(enabled: true, memoID: "test", baseline: "Old", remoteBaseline: "Old",
+                                            pendingWrite: "Books:<br>\nAuthor", reviewPhase: .verifyWrite))
+        defer { sync.stop() }
+        let client = FakeFlomo()
+        client.memo = FlomoMemo(id: "test", content: "Books:<br><br>\nDifferent author", updatedAt: "v2")
+        sync.readLocal = { "Local changes" }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertEqual(client.updates, 0)
+        XCTAssertNotNil(sync.conflict)
+        XCTAssertNotNil(sync.record.pendingWrite)
+    }
+
+    func testReviewVerifiesOldUploadAndQueuesNewLocalEditsWithoutWriting() async throws {
+        let (sync, url) = try make(SyncRecord(enabled: true, memoID: "test", baseline: "Old", remoteBaseline: "Old",
+                                            pendingWrite: "Books:<br>\nAuthor", reviewPhase: .verifyWrite))
+        defer { sync.stop() }
+        let client = FakeFlomo()
+        client.memo = FlomoMemo(id: "test", content: "Books:<br><br>\nAuthor", updatedAt: "v2")
+        sync.readLocal = { "New local text" }
+        sync.start(client: client)
+        await sync.prepareReview()
+        XCTAssertEqual(client.updates, 0)
+        XCTAssertNil(sync.conflict)
+        XCTAssertEqual(sync.phase, .waiting)
+        let saved = try FlomoSync(stateURL: url).record
+        XCTAssertNil(saved.pendingWrite)
+        XCTAssertNil(saved.reviewPhase)
+        XCTAssertEqual(saved.baseline, "Books:<br>\nAuthor")
+        await sync.synchronize()
+        XCTAssertEqual(client.memo.content, "New local text")
+        XCTAssertEqual(sync.phase, .synced)
+    }
+
+    func testReadOnlyReviewClearsStaleOneSidedConflictWithoutWriting() async throws {
+        let (sync, _) = try make()
+        defer { sync.stop() }
+        let client = FakeFlomo()
+        client.memo = FlomoMemo(id: "test", content: "Remote", updatedAt: "v2")
+        var local = "Local"
+        sync.readLocal = { local }
+        sync.start(client: client)
+        await sync.synchronize()
+        XCTAssertNotNil(sync.conflict)
+        local = "Base"
+        await sync.prepareReview()
+        XCTAssertNil(sync.conflict)
+        XCTAssertNil(sync.record.reviewPhase)
+        XCTAssertEqual(sync.phase, .waiting)
+        XCTAssertEqual(client.updates, 0)
+        XCTAssertEqual(local, "Base")
+    }
     private var folders: [URL] = []
     private func make(_ record: SyncRecord = SyncRecord(enabled: true, memoID: "test", baseline: "Base", remoteBaseline: "Base")) throws -> (FlomoSync, URL) {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("island-sync-test-\(UUID().uuidString)")

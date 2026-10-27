@@ -38,7 +38,7 @@ enum SyncDocument {
     static func toFlomo(_ text: String) -> String {
         // Flomo removes unsupported HTML heading elements on a manual save.
         // Escape only the leading marker so headings remain ordinary text there.
-        normalized(text).components(separatedBy: "\n").map { line in
+        normalized(withoutTrailingHTMLBreaks(text)).components(separatedBy: "\n").map { line in
             // Empty draft list items have been dropped by Flomo. Send them as
             // literal text so a later edit can still recover the placeholder.
             let literal: String
@@ -100,7 +100,7 @@ enum SyncDocument {
     }
 
     private static func comparisonLines(_ text: String) -> [String] {
-        return normalized(text).components(separatedBy: "\n")
+        return normalized(withoutTrailingHTMLBreaks(text)).components(separatedBy: "\n")
             .filter { !$0.isEmpty && !isEmptyDraftBullet($0) }
             .map { line in
             var compared = line
@@ -126,6 +126,15 @@ enum SyncDocument {
             compared = compared.replacingOccurrences(of: #"(\S[ \t]+)\\\+(?=[ \t])"#, with: "$1+", options: .regularExpression)
             return unwrapBareURLs(in: compared)
         }
+    }
+
+    /// Flomo serializes paragraph-end blank space as growing runs of <br>.
+    /// Ignore only unescaped tags at line ends; inline breaks, words, Markdown
+    /// hard breaks and list nesting remain significant. Apply at the transport
+    /// and comparison boundaries without rewriting the local document.
+    private static func withoutTrailingHTMLBreaks(_ text: String) -> String {
+        text.replacingOccurrences(of: #"(?im)(?<!\\)(?:<br\s*/?>[\t ]*)+(?=\r?$)"#,
+                                  with: "", options: .regularExpression)
     }
 
     private static func isEmptyDraftBullet(_ line: String) -> Bool {
@@ -179,7 +188,7 @@ enum SyncDocument {
 
     static func issue(in text: String) -> String? {
         if count(text) > limit { return L10n.tr("The document exceeds 30,000 characters. Shorten it before syncing.") }
-        if normalized(text).isEmpty { return L10n.tr("The document is empty. Empty notes are not sent to Flomo.") }
+        if toFlomo(text).isEmpty { return L10n.tr("The document is empty. Empty notes are not sent to Flomo.") }
         let patterns: [(String, String)] = [
             (#"(?m)^\s*(?:[-+*]|\d+[.)])\s+\[[ xX]\]"#, L10n.tr("Checkboxes")),
             (#"(?m)^\s*(?:`{3,}|~{3,})"#, L10n.tr("Code blocks")),

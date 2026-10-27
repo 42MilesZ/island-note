@@ -2,6 +2,18 @@ import XCTest
 @testable import IslandNote
 
 final class SyncDocumentRoundTripTests: XCTestCase {
+    func testTrailingHTMLBreaksDoNotAccumulateOrCauseFalseChanges() {
+        let local = "Books:<br><br>\nAuthor<br>\n\n- Item"
+        let remote = "Books:<br><br><br>\nAuthor<br />\n\n- Item"
+        XCTAssertTrue(SyncDocument.equivalent(local: local, remote: remote))
+        XCTAssertEqual(SyncDocument.toFlomo(local), "Books:\nAuthor\n\n- Item")
+        XCTAssertEqual(SyncDocument.toFlomo(SyncDocument.fromFlomo(remote)), SyncDocument.toFlomo(local))
+        XCTAssertFalse(SyncDocument.equivalent(local: local, remote: remote.replacingOccurrences(of: "Author", with: "Other")))
+        XCTAssertFalse(SyncDocument.equivalent(local: "A<br>B", remote: "AB"))
+        XCTAssertFalse(SyncDocument.equivalent(local: "A\\<br>", remote: "A"))
+        XCTAssertFalse(SyncDocument.equivalent(local: "A  \nB", remote: "A\nB"))
+        XCTAssertFalse(SyncDocument.equivalent(local: "- Parent\n  - Child", remote: "- Parent\n- Child"))
+    }
     func testKnownFlomoFormattingIsEquivalentWithoutChangingLocalText() {
         let local = """
         ### Project
