@@ -342,3 +342,9 @@
 "Back to comparison" = "返回对比";
 "Merge and Sync" = "合并并同步";
 "The linked memo and Island Note contain different text. Review or merge them before continuing." = "关联的 Flomo 与 Island Note 内容不同，请对比或合并后继续。";
+"Flomo renumbers ordered lists. Use consecutive numbers starting at 1 before syncing. Your local text is still saved." = "Flomo 会重排有序列表编号。请使用从 1 开始的连续编号后再同步，本机原文仍会保存。";
+"Inline code and strikethrough" = "行内代码和删除线";
+"Unsupported HTML" = "不支持的 HTML 标签";
+"Setext headings and horizontal rules" = "下划线式标题和水平分隔线";
+"Italic formatting" = "斜体";
+"Use consistent 2- or 4-space list indentation before syncing. Your local text is still saved." = "请使用一致的每层 2 或 4 个空格缩进后再同步，本机原文仍会保存。";

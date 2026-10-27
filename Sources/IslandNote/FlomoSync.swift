@@ -39,18 +39,21 @@ enum SyncDirection: Equatable { case none, push, pull, conflict }
 
 enum SyncComparison {
     static func direction(baseline: String?, remoteBaseline: String? = nil, local: String, remote: String) -> SyncDirection {
-        if SyncDocument.equivalent(local: local, remote: remote) { return .none }
-        guard let baseline else { return .conflict }
+        guard let baseline else {
+            return SyncDocument.matchesReadback(local: local, remote: remote) ? .none : .conflict
+        }
         let localChanged = !SyncDocument.equivalent(local: baseline, remote: local)
         guard let remoteBaseline else {
             // Old records lack the exact remote representation; formatting
             // damage from an older encoder still requires review.
+            if SyncDocument.matchesReadback(local: local, remote: remote) { return .none }
             return SyncDocument.equivalent(local: baseline, remote: remote) ? .push : .conflict
         }
         let remoteChanged = !SyncDocument.equivalent(local: remoteBaseline, remote: remote)
         if !localChanged && !remoteChanged { return .none }
-        if !localChanged { return .pull }
+        if !localChanged { return SyncDocument.matchesReadback(local: local, remote: remote) ? .none : .pull }
         if !remoteChanged { return .push }
+        if SyncDocument.matchesReadback(local: local, remote: remote) { return .none }
         return .conflict
     }
 }
@@ -444,9 +447,12 @@ final class FlomoSync {
                 guard !stopped, record.enabled, generation == epoch else { return }
                 let verified = try await client.fetch(id: id)
                 guard record.enabled, generation == epoch else { return }
-                guard SyncDocument.equivalent(local: local, remote: SyncDocument.fromFlomo(verified.content)) else {
+                guard SyncDocument.matchesReadback(local: local, remote: SyncDocument.fromFlomo(verified.content)) else {
                     showConflict(local: try readLocal(), remote: verified,
                                  message: "The verified Flomo content differs from the uploaded note. Review both copies before continuing.", phase: .formattingChanged); return
+                }
+                if !SyncDocument.equivalent(local: local, remote: SyncDocument.fromFlomo(verified.content)) {
+                    logger.info("Upload verified using the supported-format readback projection")
                 }
                 await settleEditorUpdates()
                 guard record.enabled, generation == epoch else { return }
@@ -548,7 +554,7 @@ final class FlomoSync {
 
     private func confirmPendingUpload(remoteText: String) throws {
         guard record.pendingMerge == nil, let pending = record.pendingWrite,
-              SyncDocument.equivalent(local: pending, remote: remoteText) else { return }
+              SyncDocument.matchesReadback(local: pending, remote: remoteText) else { return }
         record.baseline = pending
         record.remoteBaseline = remoteText
         record.pendingWrite = nil

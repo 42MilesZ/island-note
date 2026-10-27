@@ -342,3 +342,9 @@
 "Back to comparison" = "Back to comparison";
 "Merge and Sync" = "Merge and Sync";
 "The linked memo and Island Note contain different text. Review or merge them before continuing." = "The linked memo and Island Note contain different text. Review or merge them before continuing.";
+"Flomo renumbers ordered lists. Use consecutive numbers starting at 1 before syncing. Your local text is still saved." = "Flomo renumbers ordered lists. Use consecutive numbers starting at 1 before syncing. Your local text is still saved.";
+"Inline code and strikethrough" = "Inline code and strikethrough";
+"Unsupported HTML" = "Unsupported HTML";
+"Setext headings and horizontal rules" = "Setext headings and horizontal rules";
+"Italic formatting" = "Italic formatting";
+"Use consistent 2- or 4-space list indentation before syncing. Your local text is still saved." = "Use consistent 2- or 4-space list indentation before syncing. Your local text is still saved.";

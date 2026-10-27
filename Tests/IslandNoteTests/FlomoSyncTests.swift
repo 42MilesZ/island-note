@@ -41,6 +41,43 @@ private final class FakeFlomo: FlomoServing {
 
 @MainActor
 final class FlomoSyncTests: XCTestCase {
+    func testSupportedFormatReadbacksVerifyAndDoNotLoopAcrossRestart() async throws {
+        for (name, local, readback) in SyncFormatMatrixTests.supported {
+            let (sync, url) = try make()
+            let client = FakeFlomo()
+            client.readbackTransform = { _ in readback }
+            sync.readLocal = { local }
+            sync.start(client: client)
+            await sync.synchronize()
+            XCTAssertEqual(sync.phase, .synced, name)
+            XCTAssertNil(sync.record.pendingWrite, name)
+            XCTAssertEqual(client.updates, 1, name)
+            await sync.synchronize()
+            XCTAssertEqual(client.updates, 1, "Repeated check: " + name)
+            sync.stop()
+            let restarted = try FlomoSync(stateURL: url)
+            restarted.readLocal = { local }
+            restarted.start(client: client)
+            await restarted.synchronize()
+            XCTAssertEqual(restarted.phase, .synced, name)
+            XCTAssertEqual(client.updates, 1, "Restart: " + name)
+            restarted.stop()
+        }
+    }
+
+    func testLossyFormattingIsRejectedBeforeNetworkWrite() async throws {
+        for source in ["3. Third", "~~deleted~~", "<div>content</div>", "*italic*"] {
+            let (sync, _) = try make()
+            let client = FakeFlomo()
+            sync.readLocal = { source }
+            sync.start(client: client)
+            await sync.synchronize()
+            XCTAssertEqual(client.updates, 0, source)
+            XCTAssertEqual(sync.phase, .unsupported, source)
+            XCTAssertNil(sync.conflict, source)
+            sync.stop()
+        }
+    }
     func testHTMLBreakOnlyNoteCannotCreateOrEraseRemote() async throws {
         for text in ["<br>", "<br />\n<br>"] {
             for memoID: String? in [nil, "test"] {

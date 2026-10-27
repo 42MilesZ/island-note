@@ -38,7 +38,7 @@ enum SyncDocument {
     static func toFlomo(_ text: String) -> String {
         // Flomo removes unsupported HTML heading elements on a manual save.
         // Escape only the leading marker so headings remain ordinary text there.
-        normalized(withoutTrailingHTMLBreaks(text)).components(separatedBy: "\n").map { line in
+        SyncFormatProjection.stableLists(normalized(withoutTrailingHTMLBreaks(text))).components(separatedBy: "\n").map { line in
             // Empty draft list items have been dropped by Flomo. Send them as
             // literal text so a later edit can still recover the placeholder.
             let literal: String
@@ -46,13 +46,14 @@ enum SyncDocument {
                 let indentation = line.prefix(while: { $0 == " " || $0 == "\t" })
                 literal = indentation + "\\" + line.dropFirst(indentation.count)
             } else {
-                literal = line.range(of: #"^#{1,6}\s+"#, options: .regularExpression) != nil
-                    ? "\\" + line : line
+                let heading = line.range(of: #"^ {0,3}#{1,6}[\t ]+"#, options: .regularExpression) != nil
+                literal = heading ? "\\" + line.trimmingCharacters(in: .whitespaces) : line
             }
             // A tilde between word characters can be parsed as formatting and
             // deleted by Flomo. An existing Markdown escape already protects it.
-            return literal.replacingOccurrences(of: #"(?<=[\p{L}\p{N}_])~(?=[\p{L}\p{N}_])"#,
-                                                with: #"\\~"#, options: .regularExpression)
+            let protected = literal.replacingOccurrences(of: #"(?<=[\p{L}\p{N}_])~(?=[\p{L}\p{N}_])"#,
+                                                         with: #"\\~"#, options: .regularExpression)
+            return preserveStyledSeparators(protected) ?? preserveInlineSpaces(protected)
         }.joined(separator: "\n")
     }
 
@@ -75,6 +76,38 @@ enum SyncDocument {
     /// still have to match. `remote` has already passed through `fromFlomo`.
     static func equivalent(local: String, remote: String) -> Bool {
         comparisonLines(local) == comparisonLines(remote)
+    }
+
+    /// Serializer compatibility is deliberately separate from source change
+    /// detection: local hard breaks and spelling edits still count as edits.
+    static func matchesReadback(local: String, remote: String) -> Bool {
+        equivalent(local: local, remote: remote) || SyncFormatProjection.matches(local: local, remote: remote)
+    }
+
+    private static func preserveInlineSpaces(_ line: String) -> String {
+        let prefix = String(line.prefix(while: { $0 == " " || $0 == "\t" }))
+        let body = String(line.dropFirst(prefix.count))
+        let betweenTags = SyncFormatProjection.replacing(body, pattern: #"(?<=>) +(?=<)"#) { match in
+            String(repeating: "&nbsp;", count: match.range.length)
+        }
+        return prefix + SyncFormatProjection.replacing(betweenTags, pattern: #"(?<=\S) {2,}(?=\S)"#) { match in
+            " " + String(repeating: "&nbsp;", count: match.range.length - 1)
+        }
+    }
+
+    private static func preserveStyledSeparators(_ line: String) -> String? {
+        // Flomo drops whitespace-only HTML text nodes even when encoded as
+        // &nbsp;. Borrow the separator into the preceding styled span instead.
+        guard line.range(of: #"(?i)(?:</(?:mark|u|b|strong)>|\*\*|__)[\t ]+(?=<(?:mark|u|b|strong)>|\*\*|__)"#,
+                         options: .regularExpression) != nil else { return nil }
+        if let item = SyncFormatProjection.listItem(line), let html = SyncInlineFormat.html(item.body) {
+            return String(repeating: " ", count: item.indent) + item.marker + " " + html
+        }
+        if let range = line.range(of: ##"^\\#{1,6}[\t ]+"##, options: .regularExpression),
+           let html = SyncInlineFormat.html(String(line[range.upperBound...])) {
+            return String(line[range]) + html
+        }
+        return SyncInlineFormat.html(line)
     }
 
     /// Reuse readback normalization when matching a merge unit. Its heading
@@ -166,15 +199,23 @@ enum SyncDocument {
     private static func unwrapBareURLs(in line: String) -> String {
         // Only [the exact URL](the exact URL) is Flomo's automatic conversion
         // of a bare URL. Other Markdown links remain unsupported.
-        let pattern = #"\[(https?://[^\]\n]+)\]\((https?://[^)\n]+)\)"#
-        guard let expression = try? NSRegularExpression(pattern: pattern) else { return line }
-        let source = line as NSString
-        var result = line
-        for match in expression.matches(in: line, range: NSRange(location: 0, length: source.length)).reversed() {
+        let html = SyncFormatProjection.replacing(line, pattern: #"(?i)(?<!\\)<a href="(https?://[^"\n]+)"(?: rel="nofollow")?>([^<\n]*)</a>"#) { match in
+            let source = line as NSString
+            let target = SyncInlineFormat.decodeEntities(source.substring(with: match.range(at: 1)))
+            let label = SyncInlineFormat.decodeEntities(source.substring(with: match.range(at: 2)))
+            return label == target ? target : source.substring(with: match.range)
+        }
+        let pattern = #"(?<!\\)\[(https?://[^\]\n]+)\]\("#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else { return html }
+        let source = html as NSString
+        var result = html
+        for match in expression.matches(in: html, range: NSRange(location: 0, length: source.length)).reversed() {
             let label = source.substring(with: match.range(at: 1))
-            let target = source.substring(with: match.range(at: 2))
-            guard label == target, let range = Range(match.range, in: result) else { continue }
-            result.replaceSubrange(range, with: target)
+            let targetStart = NSMaxRange(match.range)
+            let target = label + ")"
+            guard source.substring(from: targetStart).hasPrefix(target),
+                  let range = Range(NSRange(location: match.range.location, length: match.range.length + (target as NSString).length), in: result) else { continue }
+            result.replaceSubrange(range, with: label)
         }
         return result
     }
@@ -196,9 +237,20 @@ enum SyncDocument {
             (#"(?m)^ {0,3}>"#, L10n.tr("Blockquotes")),
             (#"!?\[[^\]\n]+\]\([^\n]*\)|\[\[|(?m)^ {0,3}\[[^\]\n]+\]:"#, L10n.tr("Markdown links and images")),
             (#"(?m)^\s*\|?\s*:?-{3,}:?\s*\|(?:\s*:?-{3,}:?\s*\|?)+\s*$"#, L10n.tr("Tables")),
+            (#"(?<!\\)~~[^\n]+?~~|(?<!\\)`[^`\n]+`"#, L10n.tr("Inline code and strikethrough")),
+            (#"(?<![\\*])\*(?![\s*])[^*\n]+(?<!\s)\*(?!\*)|(?<![\\\w_])_(?![\s_])[^_\n]+(?<!\s)_(?![\w_])"#, L10n.tr("Italic formatting")),
+            (#"(?<![\\*])\*{3}(?=\S)[^\n]+?(?<=\S)\*{3}|(?<![\\\w_])_{3}(?=\S)[^\n]+?(?<=\S)_{3}(?![\w_])"#, L10n.tr("Italic formatting")),
+            (#"(?im)(?<!\\)<(?!/?(?:mark|u|b|strong)[\t ]*>|br[\t ]*/?>)/?[a-z][^>]*>"#, L10n.tr("Unsupported HTML")),
+            (#"(?m)^ {0,3}(?:={3,}|(?:-[\t ]*){3,}|(?:\*[\t ]*){3,}|(?:_[\t ]*){3,})[\t ]*$"#, L10n.tr("Setext headings and horizontal rules")),
         ]
         for (pattern, name) in patterns where text.range(of: pattern, options: .regularExpression) != nil {
             return L10n.format("%@ are not supported by Flomo sync. Remove that syntax to resume. Your local text is still saved.", L10n.tr(name))
+        }
+        if SyncFormatProjection.hasUnstableOrderedNumbers(text) {
+            return L10n.tr("Flomo renumbers ordered lists. Use consecutive numbers starting at 1 before syncing. Your local text is still saved.")
+        }
+        if !SyncFormatProjection.hasStableListIndentation(text) {
+            return L10n.tr("Use consistent 2- or 4-space list indentation before syncing. Your local text is still saved.")
         }
         return nil
     }
