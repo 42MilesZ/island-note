@@ -14,6 +14,27 @@ Both docked and floating panels resize continuously: each native magnification d
 
 Pinches received during a return to the island accumulate against the docked size. On arrival, queued dimensions use Ease In Out; a continuing gesture immediately takes over that transition. During opening, the editor's full footprint accepts a pinch even while its contour is still expanding. A held header or edge resize temporarily owns the interaction; the next pinch is accepted after release. Edge releases are observed even outside the handle, and a pinch recovers an unfinished edge session if the physical mouse button is no longer pressed. Opening Settings or Flomo confirmation retracts the note, including a floating note, after saving pending edits. Hover cannot reopen it over those windows; normal hover opening returns after they close. During resizing, the editor reflows visible text at its existing font size, retains its document height, and coalesces clip-view frame/bounds notifications. Release, cancellation, focus loss, keyboard input and scrolling restore normal sizing and commit final table/code-block geometry. Heading rows are created lazily; their full-document position refresh waits until resizing ends.
 
+## Lists
+
+Lists use 24-point nesting and hanging indents. Unordered markers render as
+solid circles, hollow circles, then squares; their Markdown remains standard
+`-`, `+` or `*`. Ordered siblings count from 1 within each parent. Structural
+edits update the source numbers in the affected list, including subsequent
+siblings, so saving and copying preserve the visible numbering. Merely opening
+an existing file does not rewrite it.
+
+Tab indents selected items and their children under a preceding sibling;
+Shift-Tab moves them back one level. An empty item exits one level per Return,
+then exits the list at the top level. Return continues the current list type
+and resets a new task checkbox to unchecked. Existing two- and four-space
+lists retain their indentation unit; tabs count as two source spaces. Each
+operation, including automatic numbering, can be undone together. The existing
+Flomo format restrictions still apply, including local-only task lists.
+
+List repairs log marker counts (never note content) in the `MarkdownEngine`
+subsystem, `lists` category. The maintained core and patch provenance are in
+[Vendor/MarkdownEngine](Vendor/MarkdownEngine/README.md).
+
 ## Settings and privacy
 
 Open **Settings…** from the island or editor's context menu, or press **⌘,**.

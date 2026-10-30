@@ -33,7 +33,8 @@ private struct MarkdownEditorHost: View {
         theme.strikethroughColor = theme.mutedText
         config.theme = theme
         config.textInsets = TextInsets(horizontal: 36, vertical: 10)
-        config.lists.indentPerLevel = 10
+        config.lists.indentPerLevel = 24
+        config.lists.structuredEditing = true
         config.safeAreaInsets = SafeAreaInsets(bottom: 64)
         config.spellChecking = SpellCheckingPolicy(
             continuousSpellChecking: false,
