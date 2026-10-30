@@ -942,6 +942,7 @@ extension NativeTextViewCoordinator {
             if configuration.lists.structuredEditing && configuration.lists.helpersEnabled,
                pendingListStructureEdit, let replacementString,
                !StructuredLists.isInFence(affectedCharRange.location, text: preText),
+               !StructuredLists.isCheckboxStateEdit(affectedCharRange, replacement: replacementString, in: preText),
                StructuredLists.apply(textView, range: affectedCharRange, replacement: replacementString, onlyIfRenumbered: true) {
                 return false
             }

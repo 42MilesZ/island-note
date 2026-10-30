@@ -145,6 +145,21 @@ enum StructuredLists {
         }
     }
 
+    /// Checking a task changes its state, not list hierarchy or numbering.
+    static func isCheckboxStateEdit(_ range: NSRange, replacement: String, in text: String) -> Bool {
+        guard replacement.utf16.count == range.length, text.contains("[") else { return false }
+        guard let item = items(text).first(where: {
+            range.location >= $0.marker.location && NSMaxRange(range) <= $0.content
+        }) else { return false }
+        let before = (text as NSString).substring(with: item.range)
+        let local = NSRange(location: range.location - item.range.location, length: range.length)
+        let after = (before as NSString).replacingCharacters(in: local, with: replacement)
+        func unchecked(_ line: String) -> String {
+            line.replacingOccurrences(of: #"\[[ xX]\]"#, with: "[ ]", options: .regularExpression)
+        }
+        return before != after && unchecked(before) == unchecked(after)
+    }
+
     /// Replace the smallest changed span in one native undo transaction, with no
     /// asynchronous repair pass and no rewriting during marked-text composition.
     static func apply(_ tv: NSTextView, range: NSRange, replacement: String,
@@ -168,7 +183,7 @@ enum StructuredLists {
         if a != b {
             let editRange = NSRange(location: lo, length: a.count - lo - tail)
             let insert = (final as NSString).substring(with: NSRange(location: lo, length: b.count - lo - tail))
-            MarkdownLists.performEdit(tv, replace: editRange, with: insert, normalize: false)
+            MarkdownLists.performEdit(tv, replace: editRange, with: insert)
         }
         tv.setSelectedRange(NSRange(location: start, length: end - start))
         if !patches.isEmpty { log.debug("Renumbered \(patches.count) list markers") }

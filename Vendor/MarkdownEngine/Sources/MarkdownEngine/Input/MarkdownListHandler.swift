@@ -11,9 +11,7 @@
 import AppKit
 
 struct MarkdownLists {
-    static func performEdit(_ textView: NSTextView, replace range: NSRange, with string: String, normalize: Bool = true) {
-        if normalize, (textView as? NativeTextView)?.configuration.lists.structuredEditing == true,
-           StructuredLists.apply(textView, range: range, replacement: string) { return }
+    static func performEdit(_ textView: NSTextView, replace range: NSRange, with string: String) {
         let ns = textView.string as NSString
         let loc = min(range.location, ns.length)
         let maxLen = ns.length - loc

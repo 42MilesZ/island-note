@@ -16,12 +16,15 @@ Pinches received during a return to the island accumulate against the docked siz
 
 ## Lists
 
-Lists use 24-point nesting and hanging indents. Unordered markers render as
-solid circles, hollow circles, then squares; their Markdown remains standard
-`-`, `+` or `*`. Ordered siblings count from 1 within each parent. Structural
-edits update the source numbers in the affected list, including subsequent
-siblings, so saving and copying preserve the visible numbering. Merely opening
-an existing file does not rewrite it.
+Root list markers align with ordinary prose; each nested level adds 24 points.
+All markers have a six-point visible gap before their text, with hanging indents
+for wrapped lines. Source spaces and tabs remain intact and do not widen that
+gap. Unordered markers render as equal-size solid circles, hollow circles, then
+squares; their Markdown remains standard `-`, `+` or `*`. Existing ordered
+numbers display exactly as stored. Structural list edits renumber siblings from
+1 within each parent, including subsequent siblings in the affected list.
+Opening, selecting, resizing, ordinary pair completion and task checkbox toggles
+do not normalize existing source numbers.
 
 Tab indents selected items and their children under a preceding sibling;
 Shift-Tab moves them back one level. An empty item exits one level per Return,

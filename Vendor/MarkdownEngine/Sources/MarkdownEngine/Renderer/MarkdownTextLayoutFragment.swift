@@ -709,8 +709,11 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
             guard let self, (value as? Bool) == true || value is String else { return }
             guard let pos = self.drawPosition(forDocumentCharAt: attrRange.location, point: point) else { return }
 
-            let font = (ts.attribute(.font, at: attrRange.location, effectiveRange: nil) as? NSFont)
-                ?? (self.textLayoutManager?.textContainer?.textView?.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize))
+            let structured = (self.textLayoutManager?.textContainer?.textView as? NativeTextView)?.configuration.lists.structuredEditing == true
+            let font = structured
+                ? ((self.textLayoutManager?.textContainer?.textView as? NativeTextView)?.baseFont ?? NSFont.systemFont(ofSize: 14))
+                : ((ts.attribute(.font, at: attrRange.location, effectiveRange: nil) as? NSFont)
+                    ?? NSFont.systemFont(ofSize: NSFont.systemFontSize))
             // A `.bulletMarker` range means the styler painted the raw char
             // `.clear`, so something must ALWAYS be drawn over the slot. Outside
             // a selection that's the rendered `•`; while the marker sits inside
@@ -721,12 +724,25 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
             // an empty slot wherever the selection anchor wasn't in the marker.)
             let isSelected = selectionRanges.contains(where: { NSIntersectionRange($0, attrRange).length > 0 })
             let raw = storageString.substring(with: attrRange)
-            let glyph = (isSelected ? raw : (value as? String ?? "•")) as NSString
+            let glyph = (isSelected && !structured ? raw : (value as? String ?? "•")) as NSString
+            if structured {
+                let size = ListMarkerMetrics.bulletSize(for: font)
+                let rect = CGRect(x: pos.x, y: pos.baselineY - font.xHeight / 2 - size / 2, width: size, height: size)
+                context.setFillColor(theme.bodyText.cgColor)
+                context.setStrokeColor(theme.bodyText.cgColor)
+                if (value as? String) == "▪" {
+                    context.fill(rect)
+                } else if (value as? String) == "◦" {
+                    context.setLineWidth(0.75)
+                    context.strokeEllipse(in: rect.insetBy(dx: 0.375, dy: 0.375))
+                } else { context.fillEllipse(in: rect) }
+                return
+            }
             let glyphAttrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: theme.bodyText]
 
             let markerWidth = (raw as NSString).size(withAttributes: [.font: font]).width
             let glyphWidth = glyph.size(withAttributes: glyphAttrs).width
-            let xOffset = max(0, (markerWidth - glyphWidth) / 2)
+            let xOffset = structured ? 0 : max(0, (markerWidth - glyphWidth) / 2)
             // Flipped context: text origin is its top edge, baseline sits one
             // ascent below — so top = baseline − ascent aligns the glyph.
             let topY = pos.baselineY - font.ascender
@@ -765,7 +781,9 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
             let glyph = number as NSString
             let glyphAttrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: theme.bodyText]
             let topY = pos.baselineY - font.ascender
-            glyph.draw(at: CGPoint(x: pos.x, y: topY), withAttributes: glyphAttrs)
+            let structured = (textView as? NativeTextView)?.configuration.lists.structuredEditing == true
+            let inkOffset = structured ? ListMarkerMetrics.inkBounds(number, font: font).minX : 0
+            glyph.draw(at: CGPoint(x: pos.x - inkOffset, y: topY), withAttributes: glyphAttrs)
         }
     }
 

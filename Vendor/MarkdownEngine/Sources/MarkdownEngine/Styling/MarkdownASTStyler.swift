@@ -74,7 +74,7 @@ enum MarkdownASTStyler {
             wikiLinkID: wikiLinkIDProvider,
             scopedRanges: scopedRanges,
             orderedDisplayNumbers: configuration.lists.structuredEditing
-                ? StructuredLists.numbers(structuredItems)
+                ? [:]
                 : computeOrderedDisplayNumbers(blocks: blocks, ns: ns),
             listDepths: Dictionary(uniqueKeysWithValues: structuredItems.map { ($0.marker.location, $0.depth) })
         )
@@ -372,7 +372,10 @@ enum MarkdownASTStyler {
     /// AST list-item decoration: indent paragraph, `•` bullet, checkbox + strikethrough, all caret-aware.
     private static func styleListItem(_ item: ListItem, displayNumber: Int?, ctx: Ctx, into attrs: inout [StyledRange]) {
         guard ctx.config.lists.helpersEnabled else { return }
-        if ctx.config.lists.structuredEditing && ctx.listDepths[item.marker.location] == nil { return }
+        if ctx.config.lists.structuredEditing {
+            styleStructuredListItem(item, ctx: ctx, into: &attrs)
+            return
+        }
 
         // Line content (item line minus its trailing newline).
         var line = item.range
@@ -430,7 +433,6 @@ enum MarkdownASTStyler {
                                                          length: item.contentRange.location - NSMaxRange(item.marker)))
                 return HeadingHelpers.textWidth("\(displayNumber)\(orderedPunct)" + gap, font: ctx.baseFont)
             }
-            if ctx.config.lists.structuredEditing && !item.ordered && !taskRevealed { return 20 }
             return HeadingHelpers.textWidth(ctx.ns.substring(with: markerGroup), font: ctx.baseFont)
         }()
         let depth = ctx.listDepths[item.marker.location] ?? MarkdownLists.indentLevel(from: ws)
@@ -445,27 +447,6 @@ enum MarkdownASTStyler {
         ps.tabStops = []
         ps.defaultTabInterval = ctx.config.lists.indentPerLevel
         ps.firstLineHeadIndent = ctx.config.lists.indentPerLevel
-        if ctx.config.lists.structuredEditing {
-            ps.firstLineHeadIndent += depthIndent
-            // Tabs retain their advance even in a tiny font. Give each source
-            // tab a near-zero stop, so source whitespace cannot add a second indent.
-            ps.tabStops = (0..<ws.filter { $0 == "\t" }.count).map {
-                NSTextTab(textAlignment: .left, location: ps.firstLineHeadIndent + 0.01 * CGFloat($0 + 1))
-            }
-            if !item.ordered && !taskRevealed {
-                let width = HeadingHelpers.textWidth(ctx.ns.substring(with: markerGroup), font: ctx.baseFont)
-                attrs.append((markerGroup, [.kern: (markerWidth - width) / CGFloat(max(1, markerGroup.length))]))
-            }
-            if wsRange.length > 0 {
-                attrs.append((wsRange, [.font: ctx.inlineMarkerFont, .foregroundColor: NSColor.clear, .kern: 0]))
-                // Collapse spaces as well: otherwise several tiny spaces can
-                // pass the next tab stop and make a mixed prefix jump a level.
-                let spaceWidth = HeadingHelpers.textWidth(" ", font: ctx.inlineMarkerFont)
-                for (offset, character) in ws.utf16.enumerated() where character == 0x20 {
-                    attrs.append((NSRange(location: wsRange.location + offset, length: 1), [.kern: -spaceWidth]))
-                }
-            }
-        }
         // Wrapped lines hang under the first line's content (indent + marker
         // width). No checkbox-specific extra: the box is a drawn overlay that
         // doesn't change text advance, so adding it here (and only here, not to

@@ -17,9 +17,13 @@ use native TextKit undo transactions and skip marked-text composition. Fenced
 code, including indented and tilde fences, is excluded from list mutations.
 Opening a document does not rewrite its source.
 
-The styler and layout fragment use the same depths for bullet glyphs and
-24-point nesting (configured by the app). Source whitespace does not add a
-second visual indent; bullet marker slots are consistent across `-`, `+`, `*`.
+The dedicated `Styling/MarkdownASTStyler+StructuredLists.swift` presentation
+path aligns root markers with prose, adds 24 points per nested level (configured
+by the app), and allocates a six-point gap after the visible marker. Vector
+bullets share a size; numeric marker advance uses glyph ink bounds. Extra source
+spaces and tabs collapse visually without changing text. Ordered markers paint
+the stored source numbers. Generic smart-input edits and checkbox state changes
+do not trigger source renumbering; structural list editing owns that operation.
 The native view exposes an internal marked-text mutation flag to protect the
 first input-method composition update as well as subsequent updates.
 
@@ -31,6 +35,7 @@ Other modified upstream files:
 - `TextView/Coordinator/NativeTextViewCoordinator+TextDelegate.swift`
 - `TextView/NativeTextView/NativeTextView.swift`
 - `Styling/MarkdownASTStyler.swift`
+- `Styling/MarkdownASTStyler+StructuredLists.swift`
 - `Renderer/MarkdownTextLayoutFragment.swift`
 
 `Services/WikiLinkService.swift` also removes an upstream trailing blank line;

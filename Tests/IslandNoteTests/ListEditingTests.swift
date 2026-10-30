@@ -46,7 +46,7 @@ final class ListEditingTests: XCTestCase {
     func testListLayoutAtNarrowAndWideWidths() throws {
         _ = NSApplication.shared
         let source = """
-        # 列表排版
+        普通正文与一级列表左边缘对齐
 
         1. 设计研究与资料整理
           1. 子项独立编号，长段落应在换行后继续与正文左侧对齐，而不是回到序号下方。
@@ -54,6 +54,8 @@ final class ListEditingTests: XCTestCase {
         2. 验证与交付
 
         - 实心圆：第一层
+        +     多个空格不扩大间距
+        *\tTab 分隔也保持相同间距
           + 空心圆：第二层
             * 方块：第三层
         \t- Tab 缩进同样是第二层
@@ -75,6 +77,8 @@ final class ListEditingTests: XCTestCase {
             settle()
             let layout = try XCTUnwrap(tv.textLayoutManager)
             layout.ensureLayout(for: layout.documentRange)
+            XCTAssertEqual(tv.string, source)
+            XCTAssertEqual(editor.string, source)
             XCTAssertLessThanOrEqual(layout.usageBoundsForTextContainer.width, tv.bounds.width + 1)
             if let directory = ProcessInfo.processInfo.environment["ISLAND_NOTE_RENDER_DIR"] {
                 editor.wantsLayer = true

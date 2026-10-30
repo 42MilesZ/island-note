@@ -16,6 +16,7 @@ struct StructuredListsTests {
         c.configuration = config
         let tv = NativeTextView(frame: NSRect(x: 0, y: 0, width: 360, height: 600))
         tv.configuration = config
+        tv.baseFont = NSFont(name: "SF Pro", size: 14) ?? .systemFont(ofSize: 14)
         tv.isEditable = true
         tv.allowsUndo = true
         tv.delegate = c
@@ -111,7 +112,7 @@ struct StructuredListsTests {
             caretLocation: -1, configuration: config)
         #expect(attrs.compactMap { $0.1[.bulletMarker] as? String } == ["•", "◦", "▪", "◦"])
         let styles = attrs.compactMap { $0.1[.paragraphStyle] as? NSParagraphStyle }
-        #expect(styles.map(\.firstLineHeadIndent) == [24, 48, 72, 48])
+        #expect(styles.map(\.firstLineHeadIndent) == [0, 24, 48, 24])
         #expect(styles.allSatisfy { $0.headIndent > $0.firstLineHeadIndent })
     }
     @Test func fourSpaceListsKeepTheirEstablishedUnit() {
@@ -235,6 +236,91 @@ struct StructuredListsTests {
             #expect(tv.string == source)
             withExtendedLifetime(c) {}
         }
+    }
+
+    @Test func rootMarginAndMarkerGapsIgnoreSourceWhitespace() throws {
+        let source = "普通正文\n\n- A\n*     B\n+\tC\n\n7. D\n8.     E\n9.\tF\n10. G\n  - H"
+        let (tv, c) = editor(source)
+        let layout = try #require(tv.textLayoutManager)
+        let manager = try #require(layout.textContentManager)
+        func x(at offset: Int) throws -> CGFloat {
+            layout.ensureLayout(for: manager.documentRange)
+            let start = try #require(manager.location(manager.documentRange.location, offsetBy: offset))
+            let end = try #require(manager.location(start, offsetBy: 1))
+            var x: CGFloat?
+            layout.enumerateTextSegments(in: try #require(NSTextRange(location: start, end: end)), type: .standard, options: []) { _, rect, _, _ in
+                x = rect.minX; return false
+            }
+            return try #require(x)
+        }
+        let origin = try x(at: 0)
+        for (marker, content) in [("- A", "A"), ("*     B", "B"), ("+\tC", "C"), ("7. D", "D"), ("8.     E", "E"), ("9.\tF", "F"), ("10. G", "G")] {
+            let markerPosition = caret(source, marker)
+            #expect(abs(try x(at: markerPosition) - origin) < 0.1)
+            let glyph = marker.first!.isNumber ? String(marker.prefix { $0 != " " && $0 != "\t" }) : "•"
+            let width = marker.first!.isNumber ? ListMarkerMetrics.inkBounds(glyph, font: tv.baseFont).width : ListMarkerMetrics.bulletSize(for: tv.baseFont)
+            #expect(abs(try x(at: caret(source, content)) - origin - width - 6) < 0.1)
+        }
+        #expect(abs(try x(at: caret(source, "- H")) - origin - 24) < 0.1)
+        let storage = try #require(tv.textStorage)
+        #expect(storage.attribute(.orderedMarker, at: caret(source, "7. D"), effectiveRange: nil) as? String == "7.")
+        tv.setSelectedRange(NSRange(location: 0, length: source.utf16.count))
+        c.textViewDidChangeSelection(Notification(name: NSTextView.didChangeSelectionNotification, object: tv))
+        #expect(tv.string == source)
+        #expect(abs(try x(at: caret(source, "B")) - x(at: caret(source, "A"))) < 0.1)
+        withExtendedLifetime(c) {}
+    }
+
+    @Test func ordinaryPairCompletionDoesNotRenumberExistingSource() {
+        let (tv, c) = editor("7. 原文")
+        tv.setSelectedRange(NSRange(location: tv.string.utf16.count, length: 0))
+        tv.insertText("(", replacementRange: tv.selectedRange())
+        #expect(tv.string == "7. 原文()")
+        withExtendedLifetime(c) {}
+    }
+
+    @Test func checkingTaskDoesNotRenumberOtherItems() {
+        let source = "7. A\n  - [ ] child\n8. B"
+        let (tv, c) = editor(source)
+        tv.insertText("[x]", replacementRange: (source as NSString).range(of: "[ ]"))
+        #expect(tv.string == "7. A\n  - [x] child\n8. B")
+        withExtendedLifetime(c) {}
+    }
+
+    @Test func checkboxGapAndHitTargetIgnoreExtraWhitespace() throws {
+        let source = "正文\n- [ ] A\n-     [ ] B\n-\t[ ]\tC"
+        let (tv, c) = editor(source)
+        let layout = try #require(tv.textLayoutManager)
+        let manager = try #require(layout.textContentManager)
+        let bridge = LayoutBridge(layout)
+        tv.layoutBridge = bridge
+        func rect(_ range: NSRange) throws -> CGRect {
+            layout.ensureLayout(for: manager.documentRange)
+            let start = try #require(manager.location(manager.documentRange.location, offsetBy: range.location))
+            let end = try #require(manager.location(start, offsetBy: range.length))
+            var result: CGRect?
+            layout.enumerateTextSegments(in: try #require(NSTextRange(location: start, end: end)), type: .standard, options: []) { _, frame, _, _ in
+                result = frame; return false
+            }
+            return try #require(result)
+        }
+        let origin = try rect(NSRange(location: 0, length: 1)).minX
+        let size = TaskCheckboxGeometry.size(for: tv.baseFont)
+        for label in ["A", "B", "C"] {
+            let content = caret(source, label)
+            let preceding = (source as NSString).substring(to: content) as NSString
+            let box = preceding.range(of: "[ ]", options: .backwards)
+            let anchor = try rect(box)
+            let boxX = TaskCheckboxGeometry.boxX(contentX: anchor.minX, size: size)
+            #expect(abs(boxX - origin) < 0.1)
+            #expect(abs(try rect(NSRange(location: content, length: 1)).minX - boxX - size - 6) < 0.1)
+            let hit = tv.taskCheckboxHit(at: CGPoint(x: boxX + size / 2, y: anchor.midY))
+            #expect(hit?.range == box)
+        }
+        tv.setSelectedRange(NSRange(location: 0, length: source.utf16.count))
+        c.textViewDidChangeSelection(Notification(name: NSTextView.didChangeSelectionNotification, object: tv))
+        #expect(tv.string == source)
+        withExtendedLifetime(bridge) {}
     }
 
 }
