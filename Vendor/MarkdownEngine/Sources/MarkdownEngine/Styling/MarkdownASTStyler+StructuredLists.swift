@@ -74,6 +74,18 @@ extension MarkdownASTStyler {
                 x += gap - TaskCheckboxGeometry.gap
             }
         }
+        // A fully empty item otherwise contains only the tiny hidden-marker
+        // font. Keep one invisible separator at body size so TextKit uses the
+        // same baseline before typing, after typing, and after deleting text.
+        let anchor = NSMaxRange(item.marker)
+        // Reserve its natural advance inside the existing marker gap. Forcing
+        // a full-size space to zero with negative kern is not stable in TextKit.
+        var anchorWidth: CGFloat = 0
+        if isSpace(anchor) {
+            let range = NSRange(location: anchor, length: 1)
+            anchorWidth = ns.character(at: anchor) == 9 ? 0 : HeadingHelpers.textWidth(ns.substring(with: range), font: ctx.baseFont)
+            attrs.append((range, [.font: ctx.baseFont, .kern: 0]))
+        }
         paragraph.tabStops = stops
         attrs.append((NSRange(location: item.range.location, length: end - item.range.location), [.paragraphStyle: paragraph]))
         func advance(_ range: NSRange, by width: CGFloat) {
@@ -81,7 +93,7 @@ extension MarkdownASTStyler {
             attrs.append((range, [.kern: (width - hiddenWidth) / CGFloat(max(1, range.length))]))
         }
         if let checkbox {
-            advance(item.marker, by: markerWidth + TaskCheckboxGeometry.gap)
+            advance(item.marker, by: markerWidth + TaskCheckboxGeometry.gap - anchorWidth)
             advance(checkbox, by: gap - TaskCheckboxGeometry.gap)
             attrs.append((checkbox, [.taskCheckbox: checked]))
             if checked, body < end {
@@ -91,7 +103,7 @@ extension MarkdownASTStyler {
                 ]))
             }
         } else {
-            advance(item.marker, by: markerWidth + gap)
+            advance(item.marker, by: markerWidth + gap - anchorWidth)
             attrs.append((item.marker, [item.ordered ? .orderedMarker : .bulletMarker: glyph]))
         }
     }

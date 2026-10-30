@@ -323,4 +323,31 @@ struct StructuredListsTests {
         withExtendedLifetime(bridge) {}
     }
 
+    @Test(arguments: ["1. ", "10. ", "  1. ", "1.\t", "- ", "- [ ] "], ["A", "中"])
+    func emptyListBaselineStaysStableWhenTypingAndDeleting(_ prefix: String, _ content: String) throws {
+        let (tv, c) = editor(prefix)
+        let layout = try #require(tv.textLayoutManager)
+        func baseline() throws -> CGFloat {
+            layout.ensureLayout(for: layout.documentRange)
+            var result: CGFloat?
+            layout.enumerateTextLayoutFragments(from: layout.documentRange.location, options: [.ensuresLayout]) { fragment in
+                if let line = fragment.textLineFragments.first {
+                    result = line.typographicBounds.minY + line.locationForCharacter(at: line.characterRange.location).y
+                }
+                return false
+            }
+            return try #require(result)
+        }
+        let empty = try baseline()
+        tv.setSelectedRange(NSRange(location: prefix.utf16.count, length: 0))
+        tv.insertText(content, replacementRange: tv.selectedRange())
+        let typed = try baseline()
+        #expect(abs(empty - typed) < 0.1, "Empty: \(empty), typed: \(typed)")
+        tv.insertText("", replacementRange: NSRange(location: prefix.utf16.count, length: 1))
+        let deleted = try baseline()
+        #expect(abs(deleted - typed) < 0.1, "Deleted: \(deleted), typed: \(typed)")
+        #expect(tv.string == prefix)
+        withExtendedLifetime(c) {}
+    }
+
 }
