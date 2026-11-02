@@ -24,7 +24,8 @@ xcodebuild -exportArchive -archivePath "$archive_path" \
     -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" -quiet
 app="$archive_path/Products/Applications/IslandNote.app"
 codesign --verify --deep --strict "$app"
-lipo "$app/Contents/MacOS/IslandNote" -verify_arch arm64 x86_64
+lipo "$app/Contents/MacOS/IslandNote" -verify_arch arm64
+lipo "$app/Contents/MacOS/IslandNote" -verify_arch x86_64
 # The sandboxed local-note build does not require outgoing network access.
 packages=("$export_path"/*.pkg)
 [[ ${#packages[@]} == 1 && -f "${packages[0]}" ]] || { echo 'Export must produce exactly one macOS package.' >&2; exit 1; }
