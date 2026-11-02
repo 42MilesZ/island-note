@@ -47,8 +47,10 @@ edits and keeps the app open if saving fails.
 
 The 18-point menu bar template derives from the existing app logo: a filled,
 notched sheet with two transparent text lines. The curl merges into the body
-at this size. Larger corners and a deeper notch retain their definition at
-menu bar size. AppKit handles tint, selection and spacing. After changing the
+at this size. The logo's 60% smooth-corner construction is retained. The body
+is 16 points wide, the top notch is 3 points deep, and text cutouts align to
+Retina pixels. A single vector path avoids an intermediate SVG mask.
+AppKit handles tint, selection and spacing. After changing the
 logo, run `python3 scripts/make-status-icon.py` to update the shared SVG resource
 used by both SwiftPM and the Xcode target.
 

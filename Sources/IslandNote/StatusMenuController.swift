@@ -17,6 +17,7 @@ final class StatusMenuController: NSObject {
         if let button = statusItem.button {
             let image = L10n.resource("StatusIcon", extension: "svg").flatMap { NSImage(contentsOf: $0) }
             image?.size = NSSize(width: 18, height: 18)
+            image?.cacheMode = .never
             image?.isTemplate = true
             button.image = image
             if image == nil {
