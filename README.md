@@ -45,6 +45,13 @@ open **Settings…**, or choose **Quit Island Note (⌘Q)**. The menu stays avai
 while the note is collapsed or another app is active. Quitting flushes pending
 edits and keeps the app open if saving fails.
 
+The 18-point menu bar template derives from the existing app logo: a filled,
+notched sheet with two transparent text lines. The curl merges into the body
+at this size. Larger corners and a deeper notch retain their definition at
+menu bar size. AppKit handles tint, selection and spacing. After changing the
+logo, run `python3 scripts/make-status-icon.py` to update the shared SVG resource
+used by both SwiftPM and the Xcode target.
+
 Settings also opens from the island or editor's context menu, or with **⌘,**.
 The panel retracts while settings or the policy is open so its floating level cannot hide those windows.
 Flomo and local diagnostics are independent opt-in features, both off by default on a new install. Direct-distribution updates preserve an existing Flomo connection and its paused/syncing preference when no explicit extension choice was saved.

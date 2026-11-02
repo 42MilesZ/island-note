@@ -41,5 +41,6 @@ enum L10n {
 
     static func resource(_ name: String, extension ext: String) -> URL? {
         bundle().url(forResource: name, withExtension: ext)
+            ?? resourceBundle.url(forResource: name, withExtension: ext)
     }
 }

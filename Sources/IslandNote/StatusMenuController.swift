@@ -1,4 +1,5 @@
 import AppKit
+import OSLog
 
 /// A standard left-click menu keeps Quit discoverable even while the note is hidden.
 @MainActor
@@ -6,6 +7,7 @@ final class StatusMenuController: NSObject {
     private let statusItem: NSStatusItem
     private let onOpen: () -> Void
     private let onSettings: () -> Void
+    private let logger = Logger(subsystem: "local.projects.island-note", category: "StatusMenu")
 
     init(onOpen: @escaping () -> Void, onSettings: @escaping () -> Void) {
         self.onOpen = onOpen
@@ -13,10 +15,15 @@ final class StatusMenuController: NSObject {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         super.init()
         if let button = statusItem.button {
-            let image = NSImage(systemSymbolName: "note.text", accessibilityDescription: "Island Note")
+            let image = L10n.resource("StatusIcon", extension: "svg").flatMap { NSImage(contentsOf: $0) }
+            image?.size = NSSize(width: 18, height: 18)
             image?.isTemplate = true
             button.image = image
-            if image == nil { button.title = "IN" }
+            if image == nil {
+                statusItem.length = NSStatusItem.variableLength
+                button.title = "Island Note"
+                logger.error("Logo resource unavailable; showing app name in menu bar")
+            }
             button.toolTip = "Island Note"
             button.setAccessibilityLabel("Island Note")
         }

@@ -10,6 +10,10 @@ final class StatusMenuTests: XCTestCase {
         defer { L10n.language = original }
         for language in [AppLanguage.english, .chinese] {
             L10n.language = language
+            let iconURL = try XCTUnwrap(L10n.resource("StatusIcon", extension: "svg"))
+            let icon = try XCTUnwrap(NSImage(contentsOf: iconURL))
+            XCTAssertTrue(icon.isValid)
+            XCTAssertEqual(icon.size, NSSize(width: 18, height: 18))
             var opened = 0
             var settingsOpened = 0
             let controller = StatusMenuController(onOpen: { opened += 1 }, onSettings: { settingsOpened += 1 })
