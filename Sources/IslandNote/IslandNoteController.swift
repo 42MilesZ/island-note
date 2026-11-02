@@ -173,6 +173,10 @@ final class IslandNoteController: NSObject {
 
     private var pendingCollapse: DispatchWorkItem?
     private var finishingCollapse = false
+    private var menuOpenHoverGate = MenuOpenHoverGate()
+    private var menuOpenTimer: Timer?
+    private var menuOpenEpoch = 0
+    var isMenuOpening: Bool { menuOpenTimer != nil }
     private var monitors: [Any] = []
 
     init(store: NoteStore, diagnostics: InteractionDiagnostics? = nil) {
@@ -509,6 +513,7 @@ final class IslandNoteController: NSObject {
     }
 
     deinit {
+        menuOpenTimer?.invalidate()
         resizeTimer?.invalidate()
         pendingCollapse?.cancel()
         for monitor in monitors { NSEvent.removeMonitor(monitor) }
@@ -517,8 +522,8 @@ final class IslandNoteController: NSObject {
     }
 
     private func installMonitors() {
-        let g = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] _ in
-            self?.handleHover()
+        let g = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] event in
+            self?.handleHover(event)
         }
         let l = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .scrollWheel]) { [weak self] e in
             if e.type == .scrollWheel { self?.finishPinch() }
@@ -912,13 +917,16 @@ final class IslandNoteController: NSObject {
 
     // MARK: - 悬停 / 点击
 
-    private func handleHover(_ event: NSEvent? = nil) {
+    func handleHover(_ event: NSEvent? = nil) {
         guard !dragInteraction.preventsCollapse else { return }
         guard mode == .expanded || !isAuxiliaryWindowOpen else { return }
         // Shrinking can move the edge past a stationary pointer. Wait for the
         // gesture/animation to finish before accepting a new hover-exit movement.
         guard !isPinching, resizeTimer == nil else { return }
         let loc = screenPoint(for: event)
+        let isMovement = event?.type == .mouseMoved || event?.type == .leftMouseDragged
+        guard menuOpenHoverGate.allowsHover(at: loc, isMovement: isMovement,
+            timestamp: event?.timestamp ?? ProcessInfo.processInfo.systemUptime) else { return }
         switch mode {
         case .expanded:
             let inExpanded = screenRect(rect(for: .expanded)).insetBy(dx: -10, dy: -8).contains(loc)
@@ -926,9 +934,11 @@ final class IslandNoteController: NSObject {
                 pendingCollapse?.cancel()
                 pendingCollapse = nil
             } else if pendingCollapse == nil {
+                let epoch = menuOpenEpoch
                 let work = DispatchWorkItem { [weak self] in
                     guard let self else { return }
                     self.pendingCollapse = nil
+                    guard self.menuOpenEpoch == epoch else { return }
                     if self.mode == .expanded, !self.dragInteraction.preventsCollapse,
                        !self.screenRect(self.rect(for: .expanded)).insetBy(dx: -6, dy: -4).contains(NSEvent.mouseLocation) {
                         self.collapse(automatically: true)
@@ -951,6 +961,7 @@ final class IslandNoteController: NSObject {
     }
 
     private func handleClick(_ e: NSEvent?) {
+        guard !menuOpenHoverGate.isActive else { return }
         guard !dragInteraction.preventsCollapse else { return }
         guard mode == .expanded || !isAuxiliaryWindowOpen else { return }
         let loc = screenPoint(for: e)
@@ -1097,17 +1108,44 @@ final class IslandNoteController: NSObject {
 
     // MARK: - 状态机
 
-    private func openFromStatusMenu() {
+    func openFromStatusMenu() {
         if let window = settingsWindow?.window, window.isVisible {
             showSettings()
             return
         }
         guard !isAuxiliaryWindowOpen else { return }
+        pendingCollapse?.cancel()
+        pendingCollapse = nil
+        menuOpenTimer?.invalidate()
+        menuOpenTimer = nil
+        menuOpenEpoch += 1
+        menuOpenHoverGate.begin()
         expand()
+        waitForMenuOpening()
         // A floating note may already be expanded but belong to an inactive app.
         NSApp.activate(ignoringOtherApps: true)
         panel.makeKeyAndOrderFront(nil)
         editor.focus()
+    }
+
+    private func waitForMenuOpening() {
+        // Read the actual animation lifecycle, not a guessed opening delay.
+        if maskLayer.animation(forKey: "path") == nil {
+            menuOpenHoverGate.openingFinished(at: NSEvent.mouseLocation)
+            return
+        }
+        let timer = Timer(timeInterval: 1 / 60.0, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self, self.mode == .expanded else { timer.invalidate(); return }
+                guard self.maskLayer.animation(forKey: "path") == nil else { return }
+                timer.invalidate()
+                self.menuOpenTimer = nil
+                self.menuOpenHoverGate.openingFinished(at: NSEvent.mouseLocation)
+                self.logger.info("Menu opening completed; waiting for pointer movement")
+            }
+        }
+        menuOpenTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     func expand() {
@@ -1134,6 +1172,7 @@ final class IslandNoteController: NSObject {
     }
 
     func collapse(automatically: Bool = false) {
+        guard !automatically || menuOpenTimer == nil else { return }
         if dragInteraction.preventsCollapse {
             guard !automatically else { return }
             dragInteraction.cancelAndDock(collapse: true)
@@ -1145,10 +1184,12 @@ final class IslandNoteController: NSObject {
         }
         guard !finishingCollapse else { return }
         finishingCollapse = true
+        let epoch = menuOpenEpoch
         // The Markdown editor delivers the new source text asynchronously.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.finishingCollapse = false
+            guard self.menuOpenEpoch == epoch else { return }
             guard self.mode == .expanded, !self.dragInteraction.preventsCollapse else { return }
             self.editor.flushPending()
             guard self.store.flushSync() else { return }
@@ -1179,6 +1220,11 @@ final class IslandNoteController: NSObject {
         pendingCollapse?.cancel()
         pendingCollapse = nil
         mode = m
+        if m != .expanded {
+            menuOpenTimer?.invalidate()
+            menuOpenTimer = nil
+            menuOpenHoverGate.reset()
+        }
         hitGate.hitRect = rect(for: m)
         island.hitRect = rect(for: m)
         resizeHandles.panelRect = expandedRect

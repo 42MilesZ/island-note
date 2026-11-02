@@ -44,6 +44,10 @@ open **Settings…**, or choose **Quit Island Note (⌘Q)**. The menu stays avai
 while the note is collapsed or another app is active. Quitting flushes pending
 edits and keeps the app open if saving fails.
 
+Opening from the menu keeps the note visible through its complete expansion.
+Automatic collapse starts only after a new pointer movement outside the note;
+stationary input and movements queued before the animation finished are ignored.
+
 The 18-point menu bar template derives from the existing app logo: a filled,
 notched sheet with two transparent text lines. The curl merges into the body
 at this size. The logo's 60% smooth-corner construction is retained. The body
