@@ -21,7 +21,7 @@ final class MenuOpenInteractionTests: XCTestCase {
         try "Keep this text".write(to: note, atomically: true, encoding: .utf8)
         let previousMenu = NSApp.mainMenu
         let existing = Set(NSApp.windows.map(ObjectIdentifier.init))
-        let controller = IslandNoteController(store: NoteStore(fileURL: note, configurationDirectory: directory),
+        let controller = IslandNoteController(store: NoteStore(fileURL: note, configurationDirectory: directory), enableSync: false,
             diagnostics: InteractionDiagnostics(defaults: nil, enabled: false))
         let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? IslandPanel }.first {
             !existing.contains(ObjectIdentifier($0))
