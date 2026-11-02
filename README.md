@@ -40,7 +40,12 @@ subsystem, `lists` category. The maintained core and patch provenance are in
 
 ## Settings and privacy
 
-Open **Settings…** from the island or editor's context menu, or press **⌘,**.
+Left-click the Island Note icon in the macOS menu bar to open the note,
+open **Settings…**, or choose **Quit Island Note (⌘Q)**. The menu stays available
+while the note is collapsed or another app is active. Quitting flushes pending
+edits and keeps the app open if saving fails.
+
+Settings also opens from the island or editor's context menu, or with **⌘,**.
 The panel retracts while settings or the policy is open so its floating level cannot hide those windows.
 Flomo and local diagnostics are independent opt-in features, both off by default on a new install. Direct-distribution updates preserve an existing Flomo connection and its paused/syncing preference when no explicit extension choice was saved.
 The interface follows the system language, using Simplified Chinese for Chinese and English otherwise.
@@ -190,6 +195,7 @@ Built with Swift, AppKit, and [SwiftMarkdownEngine](https://github.com/nodes-app
 `make testflight` generates the Xcode project from `project.yml`, archives a
 universal Apple Silicon / Intel app, exports using App Store Connect signing,
 validates the package, then uploads it. XcodeGen and Xcode 26 are required.
+The Xcode target uses the same maintained `Vendor/MarkdownEngine` package as local SwiftPM builds.
 `ASC_KEY_ID` and `ASC_ISSUER_ID` come from the shell environment; the private key
 stays in `~/.appstoreconnect/private_keys/`. Build `3` was previously uploaded. The current release version is `1.0`, with default build `5`. Set `BUILD_NUMBER` to a new increasing integer
 for subsequent uploads. An App Store Connect app record

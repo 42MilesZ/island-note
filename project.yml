@@ -6,8 +6,7 @@ options:
     macOS: '14.0'
 packages:
   MarkdownEngine:
-    url: https://github.com/nodes-app/swift-markdown-engine.git
-    exactVersion: 0.13.0
+    path: Vendor/MarkdownEngine
 settings:
   base:
     SWIFT_VERSION: '5.9'

@@ -107,6 +107,7 @@ final class IslandNoteController: NSObject {
     private var sync: FlomoSync?
     private let preferences: AppPreferences
     private let canEnableSync: Bool
+    private var statusMenu: StatusMenuController?
     private var settingsWindow: SettingsWindowController?
     private var showingSyncSettings = false
     private var syncSettingsInFlight = false
@@ -187,6 +188,8 @@ final class IslandNoteController: NSObject {
         installMainMenu()
         setup()
         bindStore()
+        statusMenu = StatusMenuController(onOpen: { [weak self] in self?.openFromStatusMenu() },
+                                          onSettings: { [weak self] in self?.showSettings() })
         #if ISLAND_EVENT_PROBE
         #if ISLAND_GESTURE_SNAPSHOT
         EventDeliveryProbe.shared.configure(isEnabled: { [weak self] in self?.diagnostics.isEnabled ?? false },
@@ -218,7 +221,6 @@ final class IslandNoteController: NSObject {
         edit.addItem(withTitle: L10n.tr("Paste"), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         edit.addItem(withTitle: L10n.tr("Select All"), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editItem.submenu = edit
-        main.addItem(editItem)
 
         let appItem = NSMenuItem()
         let appMenu = NSMenu(title: "Island Note")
@@ -230,9 +232,11 @@ final class IslandNoteController: NSObject {
         appMenu.addItem(privacy)
         appMenu.addItem(.separator())
         let quit = NSMenuItem(title: L10n.tr("Quit Island Note"), action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        quit.target = NSApp
         appMenu.addItem(quit)
         appItem.submenu = appMenu
         main.addItem(appItem)
+        main.addItem(editItem)
 
         NSApp.mainMenu = main
     }
@@ -1170,6 +1174,19 @@ final class IslandNoteController: NSObject {
     }
 
     // MARK: - 状态机
+
+    private func openFromStatusMenu() {
+        if let window = settingsWindow?.window, window.isVisible {
+            showSettings()
+            return
+        }
+        guard !isAuxiliaryWindowOpen else { return }
+        expand()
+        // A floating note may already be expanded but belong to an inactive app.
+        NSApp.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+        editor.focus()
+    }
 
     func expand() {
         guard mode != .expanded else { return }

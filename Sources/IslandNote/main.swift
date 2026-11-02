@@ -14,6 +14,6 @@ let app = NSApplication.shared
 #endif
 let delegate = AppDelegate()
 app.delegate = delegate
-// No Dock icon, no menu bar item — pure hover utility.
+// Keep the hover utility out of the Dock; the status item exposes standard commands.
 app.setActivationPolicy(.accessory)
 app.run()

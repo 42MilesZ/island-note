@@ -7,7 +7,7 @@ Island Note 是 macOS 屏幕顶部的笔记工具，需要 macOS 14 或更高版
 1. 把鼠标移到屏幕顶部的黑色区域，展开笔记并输入。内容会自动保存在本机。
 2. 从输入框顶部的空白横条拖出，笔记会成为保持置顶的悬浮面板。拖动边缘调整大小，或用触控板缩放手势连续调整。
 3. 拖回顶部附近并松手，面板吸附回去。按 Esc 可以回到顶部并收起。
-4. 通过右键菜单或按 ⌘, 打开设置。界面语言跟随系统，支持简体中文与英文。
+4. 左键点击 macOS 菜单栏中的 Island Note 图标，可以打开笔记、设置或选择“退出 Island Note”（⌘Q）。设置也可通过右键菜单或 ⌘, 打开。界面语言跟随系统，支持简体中文与英文。
 
 ## Markdown 与目录
 
@@ -44,7 +44,7 @@ Island Note is a note panel at the top of your Mac screen. It requires macOS 14 
 1. Hover over the black area at the top of the screen to open your note. Text saves automatically on your Mac.
 2. Drag the empty header away from the top to create a floating panel that stays above other windows. Resize its edges or use a trackpad magnification gesture.
 3. Drag back near the top and release to dock. Press Esc to return and collapse.
-4. Open Settings from the context menu or with ⌘,. The interface follows your system language, with English and Simplified Chinese supported.
+4. Left-click the Island Note icon in the macOS menu bar to open your note, Settings, or Quit Island Note (⌘Q). Settings also opens from the context menu or with ⌘,. The interface follows your system language, with English and Simplified Chinese supported.
 
 ## Markdown and the outline
 
