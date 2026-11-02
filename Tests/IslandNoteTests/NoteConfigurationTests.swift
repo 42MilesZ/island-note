@@ -74,34 +74,34 @@ final class NoteConfigurationTests: XCTestCase {
         }
     }
 
-    func testSaveLocationChangeKeepsTheSameConnectionWithoutReplacingAnother() throws {
+    func testLocalFileOperationsIgnoreAndPreserveLegacySyncRecords() throws {
         try fixture { directory in
             let store = NoteStore(configurationDirectory: directory)
             _ = try store.load()
-            let original = store.fileURL
-            let record = SyncRecord(enabled: true, memoID: "original", baseline: "Base", pendingWrite: "Pending")
-            try JSONEncoder().encode(record).write(to: directory.appendingPathComponent("flomo-sync.json"))
-            try store.prepareSyncState()
+            store.save("Local note")
+            let legacy = directory.appendingPathComponent("flomo-sync.json")
             let originalState = store.syncStateURL
+            // Malformed and unresolved records must not block local file changes.
+            let legacyData = Data("unreadable legacy state".utf8)
+            let originalData = try JSONEncoder().encode(SyncRecord(enabled: true, memoID: "old", pendingWrite: "Pending"))
+            try legacyData.write(to: legacy)
+            try FileManager.default.createDirectory(at: originalState.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try originalData.write(to: originalState)
             let copy = directory.appendingPathComponent("relocated.md")
-            _ = try store.saveCopyAndSwitch(to: copy)
-            let relocated = try JSONDecoder().decode(SyncRecord.self, from: Data(contentsOf: store.syncStateURL))
-            XCTAssertEqual(relocated, record)
-            let paused = try JSONDecoder().decode(SyncRecord.self, from: Data(contentsOf: originalState))
-            XCTAssertFalse(paused.enabled)
-            XCTAssertEqual(paused.memoID, record.memoID)
-            XCTAssertEqual(paused.pendingWrite, record.pendingWrite)
-            let copiedState = store.syncStateURL
-            _ = try store.openExisting(original)
-            try FileManager.default.removeItem(at: copy) // Own disposable fixture only.
-            XCTAssertThrowsError(try store.saveCopyAndSwitch(to: copy))
-            XCTAssertFalse(FileManager.default.fileExists(atPath: copy.path))
-            XCTAssertEqual(store.fileURL, original)
-            XCTAssertEqual(try JSONDecoder().decode(SyncRecord.self, from: Data(contentsOf: copiedState)), record)
+            let destinationState = NoteStore(fileURL: copy, configurationDirectory: directory).syncStateURL
+            try FileManager.default.createDirectory(at: destinationState.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let destinationData = Data("unrelated previous connection".utf8)
+            try destinationData.write(to: destinationState)
+            XCTAssertEqual(try store.saveCopyAndSwitch(to: copy), "Local note")
+            XCTAssertEqual(try store.openExisting(directory.appendingPathComponent("Island Note.md")), "Local note")
+            XCTAssertEqual(try Data(contentsOf: legacy), legacyData)
+            XCTAssertEqual(try Data(contentsOf: originalState), originalData)
+            XCTAssertEqual(try Data(contentsOf: destinationState), destinationData)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent("legacy-sync-document.json").path))
         }
     }
 
-    func testSaveLocationConfigurationFailureRestoresOnlyOriginalActiveConnection() throws {
+    func testSaveLocationConfigurationFailureKeepsOriginalConnectionAndNewNote() throws {
         try fixture { directory in
             let store = NoteStore(configurationDirectory: directory)
             _ = try store.load()

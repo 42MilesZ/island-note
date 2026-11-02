@@ -36,7 +36,7 @@ final class FloatingPinchTests: XCTestCase {
         let existing = Set(NSApp.windows.map(ObjectIdentifier.init))
         let previousMenu = NSApp.mainMenu
         defer { NSApp.mainMenu = previousMenu }
-        let controller = IslandNoteController(store: NoteStore(fileURL: note), enableSync: false)
+        let controller = IslandNoteController(store: NoteStore(fileURL: note), diagnostics: InteractionDiagnostics(defaults: nil, enabled: false))
         let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? IslandPanel }.first {
             !existing.contains(ObjectIdentifier($0))
         })

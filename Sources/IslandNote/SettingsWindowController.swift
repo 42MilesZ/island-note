@@ -2,21 +2,14 @@ import AppKit
 
 @MainActor
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
-    private let preferences: AppPreferences
     private let diagnostics: InteractionDiagnostics
     private let appVersion: String
     private var fileName: NSTextField!
     private var fileLocation: NSTextField!
-    private var flomo: SettingsSwitch!
     private var diagnostic: SettingsSwitch!
-    private var configure: SettingsButton!
     private var export: SettingsButton!
     private var clear: SettingsButton!
     private var infoPopover: NSPopover?
-    var onFlomoToggle: ((Bool) -> Bool)?
-    var onConfigureFlomo: (() -> Void)?
-    var automaticSyncIsPaused: (() -> Bool?)?
-    var onToggleAutomaticSync: (() -> Void)?
     var onDiagnosticToggle: (() -> Void)?
     var onExportDiagnostics: (() -> Void)?
     var onClearDiagnostics: (() -> Void)?
@@ -25,14 +18,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     var notePath = ""
     var onOpenNote: (() -> Void)?
     var onSaveNoteAs: (() -> Void)?
-    var onImportConnection: (() -> Void)?
 
-    init(preferences: AppPreferences, diagnostics: InteractionDiagnostics,
+    init(diagnostics: InteractionDiagnostics,
          appVersion: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0") {
-        self.preferences = preferences
         self.diagnostics = diagnostics
         self.appVersion = appVersion
-        let height = min(CGFloat(660), (NSScreen.main?.visibleFrame.height ?? 800) - 80)
+        let height = min(CGFloat(530), (NSScreen.main?.visibleFrame.height ?? 800) - 80)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 540, height: height),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -54,9 +45,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             : NSString(string: URL(fileURLWithPath: notePath).deletingLastPathComponent().path).abbreviatingWithTildeInPath
         fileLocation.toolTip = notePath
         fileLocation.setAccessibilityValue(notePath)
-        flomo.state = preferences.flomoEnabled ? .on : .off
         diagnostic.state = diagnostics.isEnabled ? .on : .off
-        configure.isEnabled = preferences.flomoEnabled
         let hasRecords = !diagnostics.events.isEmpty || diagnostics.reportURL.map { FileManager.default.fileExists(atPath: $0.path) } == true
         export.isEnabled = diagnostics.isEnabled || hasRecords
         clear.isEnabled = hasRecords
@@ -99,16 +88,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let change = button("Change Save Location…", action: #selector(saveNoteAs))
         let open = button("Open Existing File…", action: #selector(openNote))
         file.addArrangedSubview(row([change, open]))
-        change.toolTip = L10n.tr("Save this note at a new location. The previous file is kept and its sync is paused.")
-        open.toolTip = L10n.tr("Edit an existing file and save back to it. It keeps its own Flomo connection.")
-        let sync = card(in: stack)
-        flomo = SettingsSwitch(title: L10n.tr("Flomo Sync"), target: self, action: #selector(toggleFlomo(_:)))
-        flomo.setAccessibilityIdentifier("settings.flomo")
-        sync.addArrangedSubview(heading("Flomo Sync", control: flomo))
-        sync.addArrangedSubview(label("Optional sync with your own Flomo account.", secondary: true, wrapping: true))
-        configure = button("Configure Flomo…", action: #selector(configureFlomo))
-        let more = button("More Flomo Options", action: #selector(flomoOptions(_:)), symbol: "ellipsis")
-        sync.addArrangedSubview(row([configure, more]))
+        change.toolTip = L10n.tr("Save this note at a new location. The previous file is kept.")
+        open.toolTip = L10n.tr("Edit an existing file and save back to it.")
         let records = card(in: stack)
         diagnostic = SettingsSwitch(title: L10n.tr("Record Local Diagnostics"), target: self, action: #selector(toggleDiagnostics))
         diagnostic.setAccessibilityIdentifier("settings.diagnostics")
@@ -171,28 +152,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         button.setAccessibilityLabel(L10n.tr(title))
         return button
     }
-    @objc private func toggleFlomo(_ sender: NSButton) { _ = onFlomoToggle?(sender.state == .on); rebuild() }
-    @objc private func configureFlomo() { onConfigureFlomo?() }
     @objc private func toggleDiagnostics() { onDiagnosticToggle?(); rebuild() }
     @objc private func exportDiagnostics() { onExportDiagnostics?(); rebuild() }
     @objc private func clearDiagnostics() { onClearDiagnostics?(); rebuild() }
     @objc private func showPrivacy() { onPrivacy?() }
     @objc private func openNote() { onOpenNote?(); rebuild() }
     @objc private func saveNoteAs() { onSaveNoteAs?(); rebuild() }
-    @objc private func importConnection() { onImportConnection?(); rebuild() }
-    @objc private func toggleAutomaticSync() { onToggleAutomaticSync?(); rebuild() }
-    @objc private func flomoOptions(_ sender: NSButton) {
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        if let paused = automaticSyncIsPaused?() {
-            let toggle = NSMenuItem(title: L10n.tr(paused ? "Resume Sync" : "Pause Sync"), action: #selector(toggleAutomaticSync), keyEquivalent: "")
-            toggle.target = self; menu.addItem(toggle); menu.addItem(.separator())
-        }
-        let restore = NSMenuItem(title: L10n.tr("Restore Previous Flomo Connection…"), action: #selector(importConnection), keyEquivalent: "")
-        restore.isEnabled = onImportConnection != nil
-        restore.target = self; menu.addItem(restore)
-        menu.popUp(positioning: nil, at: NSPoint(x: sender.bounds.minX, y: sender.bounds.minY - 4), in: sender)
-    }
     @objc private func showDiagnosticInfo(_ sender: NSButton) {
         let controller = NSViewController()
         let description = label("Turn on, reproduce the problem, then export a report. Records stay on this Mac, without note text, account details or screenshots.", wrapping: true, width: 300)

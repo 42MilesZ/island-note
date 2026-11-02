@@ -76,7 +76,7 @@ final class ReleaseExperienceTests: XCTestCase {
         for language in [AppLanguage.english, .chinese] {
             L10n.language = language
             let policy = try String(contentsOf: XCTUnwrap(L10n.resource("Privacy", extension: "html")), encoding: .utf8)
-            XCTAssertTrue(policy.contains("https://help.flomoapp.com/privacy.html"))
+            XCTAssertFalse(policy.contains("https://help.flomoapp.com/privacy.html"))
             XCTAssertTrue(policy.contains("300"))
             XCTAssertTrue(policy.contains(language == .chinese ? "本机笔记" : "Local notes"))
             XCTAssertFalse(policy.contains("<script"))
@@ -117,14 +117,13 @@ final class ReleaseExperienceTests: XCTestCase {
         XCTAssertTrue(text.undoManager === undo)
     }
 
-    func testSettingsControlsFitBothLanguagesAndFlomoStartsDisabled() throws {
+    func testLocalSettingsControlsFitBothLanguages() throws {
         let original = L10n.language
         defer { L10n.language = original }
         for language in [AppLanguage.english, .chinese] {
             L10n.language = language
-            let preferences = AppPreferences(defaults: nil)
             let diagnostics = InteractionDiagnostics(defaults: nil, enabled: false)
-            let controller = SettingsWindowController(preferences: preferences, diagnostics: diagnostics, appVersion: "1.0")
+            let controller = SettingsWindowController(diagnostics: diagnostics, appVersion: "1.0")
             controller.notePath = "/Users/example/Documents/Miles-Vault/Daily notes/Island Note.md"
             controller.rebuild()
             let window = try XCTUnwrap(controller.window)
@@ -136,9 +135,8 @@ final class ReleaseExperienceTests: XCTestCase {
             func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
             let views = descendants(root)
             XCTAssertFalse(views.contains { $0 is NSPopUpButton })
-            let flomo = try XCTUnwrap(views.compactMap { $0 as? NSButton }.first { $0.accessibilityIdentifier() == "settings.flomo" })
-            XCTAssertEqual(flomo.state, .off)
-            XCTAssertFalse(views.compactMap { $0 as? NSButton }.first { $0.title == L10n.tr("Configure Flomo…") }?.isEnabled ?? true)
+            XCTAssertFalse(views.compactMap { $0 as? NSButton }.contains { $0.accessibilityIdentifier() == "settings.flomo" })
+            XCTAssertFalse(views.compactMap { $0 as? NSTextField }.contains { $0.stringValue.localizedCaseInsensitiveContains("flomo") })
             for view in views where view is NSButton || view is NSTextField || view is NSPopUpButton {
                 XCTAssertGreaterThan(view.bounds.width, 0)
                 XCTAssertGreaterThan(view.bounds.height, 0)
@@ -154,7 +152,6 @@ final class ReleaseExperienceTests: XCTestCase {
                 root.cacheDisplay(in: root.bounds, to: bitmap)
                 try bitmap.representation(using: .png, properties: [:])?.write(to: directory.appendingPathComponent("settings-" + language.rawValue + ".png"))
             }
-            preferences.setFlomoEnabled(true)
             controller.rebuild()
             window.appearance = NSAppearance(named: .darkAqua)
             RunLoop.main.run(until: Date().addingTimeInterval(0.3))
@@ -166,42 +163,32 @@ final class ReleaseExperienceTests: XCTestCase {
         }
     }
 
-    func testSettingsSwitchAcceptsAndRejectsChangesWithoutReplacingFocusedControls() throws {
-        let preferences = AppPreferences(defaults: nil)
-        let controller = SettingsWindowController(preferences: preferences,
-            diagnostics: InteractionDiagnostics(defaults: nil, enabled: false))
+    func testDiagnosticSwitchKeepsFocusedControlsAndWindow() throws {
+        let diagnostics = InteractionDiagnostics(defaults: nil, enabled: false)
+        let controller = SettingsWindowController(diagnostics: diagnostics)
         let window = try XCTUnwrap(controller.window)
         defer { window.close() }
         controller.showWindow(nil)
         let root = try XCTUnwrap(window.contentView)
         root.layoutSubtreeIfNeeded()
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
-        let buttons = descendants(root).compactMap { $0 as? NSButton }
-        let flomo = try XCTUnwrap(buttons.first { $0.accessibilityIdentifier() == "settings.flomo" })
-        let configure = try XCTUnwrap(buttons.first { $0.title == L10n.tr("Configure Flomo…") })
-        window.makeFirstResponder(flomo)
+        let diagnostic = try XCTUnwrap(descendants(root).compactMap { $0 as? NSButton }.first { $0.accessibilityIdentifier() == "settings.diagnostics" })
+        window.makeFirstResponder(diagnostic)
         let initialFrame = window.frame
-        controller.onFlomoToggle = { preferences.setFlomoEnabled($0); return true }
-        flomo.performClick(nil)
+        let state = InteractionDiagnosticState(mode: "rest", floating: false, dragging: false,
+            docking: false, edgeResizing: false, animating: false, panelKey: false, appActive: true,
+            reduceMotion: false, width: 460, height: 275, targetWidth: nil, targetHeight: nil,
+            screenWidth: 1400, screenHeight: 900)
+        controller.onDiagnosticToggle = { diagnostics.setEnabled(!diagnostics.isEnabled, state: state) }
+        diagnostic.performClick(nil)
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
-        XCTAssertTrue(preferences.flomoEnabled)
-        XCTAssertEqual(flomo.state, .on)
-        XCTAssertTrue(configure.isEnabled)
-        XCTAssertTrue(window.firstResponder === flomo)
-        let thumb = try XCTUnwrap(flomo.layer?.sublayers?.first?.sublayers?.first)
-        XCTAssertEqual(thumb.position.x, 31, "The native action must update the drawn switch as well as its state.")
-        controller.onFlomoToggle = { _ in false }
-        flomo.performClick(nil)
+        XCTAssertTrue(diagnostics.isEnabled)
+        XCTAssertEqual(diagnostic.state, .on)
+        XCTAssertTrue(window.firstResponder === diagnostic)
+        diagnostic.performClick(nil)
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
-        XCTAssertEqual(flomo.state, .on)
-        XCTAssertTrue(configure.isEnabled)
-        XCTAssertEqual(thumb.position.x, 31)
-        controller.onFlomoToggle = { preferences.setFlomoEnabled($0); return true }
-        flomo.performClick(nil)
-        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
-        XCTAssertEqual(flomo.state, .off)
-        XCTAssertFalse(configure.isEnabled)
-        XCTAssertEqual(thumb.position.x, 13)
+        XCTAssertFalse(diagnostics.isEnabled)
+        XCTAssertEqual(diagnostic.state, .off)
         XCTAssertTrue(window.contentView === root)
         XCTAssertEqual(window.frame, initialFrame)
     }

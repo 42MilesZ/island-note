@@ -1,18 +1,10 @@
 # Island Note 隐私政策
 
-更新日期：2026 年 10 月 8 日。开发者：hanyu zhu。
+更新日期：2026 年 11 月 2 日。开发者：hanyu zhu。
 
 ## 本机笔记
 
 Island Note 默认在你的 Mac 上保存笔记，无需注册账号。应用不会自动向开发者发送笔记，也没有开发者运营的笔记服务器。Mac App Store 版本默认将笔记保存在应用的沙盒容器内。你可以在设置中更改保存位置，或打开已有的 Markdown、纯文本文件并保存回原文件。商店版读写沙盒以外的文件，需要你通过系统文件选择器授权；访问授权保存在本机，以便下次继续使用。直装版本也支持你配置的本机文件。应用设置用于保存功能开关。界面语言跟随系统。
-
-## 可选的 Flomo 同步
-
-Flomo 同步默认关闭。开启时会先说明数据用途；连接自己的 Flomo 账号后，应用通过 HTTPS 将这份笔记发送给 Flomo，并读取已连接的备忘录以完成双向同步。你使用查找功能时，搜索词也会发送给 Flomo。请求会携带用于授权的个人令牌及对应备忘录的标识。已有连接在重新开启后会按此前的同步或暂停状态恢复。
-
-令牌保存在 macOS 钥匙串中，不写入笔记或诊断报告。为防止同步丢失内容，应用在本机保留同步状态、版本比较所需的内容和替换前的备份。开发者不会接收这些同步内容。Flomo 是独立的第三方服务，其数据存储、保留和删除规则请查阅 [Flomo 隐私政策](https://help.flomoapp.com/privacy.html)。
-
-关闭 Flomo 开关会停止新的同步请求；已发出的请求可能完成。两端笔记、已保存的令牌和本机备份会保留，关闭开关不会删除 Flomo 上的内容。你可以在 Flomo 管理或删除远端笔记，并在 macOS 钥匙串访问中删除已保存的令牌。
 
 ## 本机诊断
 
@@ -22,9 +14,9 @@ Flomo 同步默认关闭。开启时会先说明数据用途；连接自己的 F
 
 ## 数据保留与控制
 
-笔记和本机同步备份会保留，直到你主动修改或删除相应文件。卸载应用不保证删除本机数据、系统备份或钥匙串中的令牌。删除数据前请保留需要的笔记；如果使用系统备份或其他备份服务，也需要单独管理其中的副本。
+笔记会保留，直到你主动修改或删除相应文件。旧版本留下的同步状态、备份和钥匙串令牌会保留，当前版本不会读取令牌或启动同步。卸载应用不保证删除本机数据、系统备份或钥匙串中的令牌。删除数据前请保留需要的笔记；如果使用系统备份或其他备份服务，也需要单独管理其中的副本。
 
-应用没有广告、第三方分析或用于跨应用追踪的功能。开启 Flomo 同步不影响你关闭本机诊断；两项功能分别控制。
+应用没有广告、第三方分析或用于跨应用追踪的功能。本机诊断由你在设置中控制。
 
 ## 政策更新与联系
 
@@ -34,19 +26,11 @@ Flomo 同步默认关闭。开启时会先说明数据用途；连接自己的 F
 
 # Island Note Privacy Policy
 
-Updated October 8, 2026. Developer: hanyu zhu.
+Updated November 2, 2026. Developer: hanyu zhu.
 
 ## Local notes
 
 Island Note saves notes on your Mac by default and does not require an app account. It does not automatically send notes to the developer, and the developer does not operate a note server. The Mac App Store version saves notes in its sandbox container by default. In Settings, you can change the save location or open an existing Markdown or plain-text file and save changes back to it. Access to files outside the store app’s sandbox requires your authorization through the system file picker. This authorization stays on your Mac so the app can reopen the file later. The direct-distribution version also supports local files you configure. App preferences store your feature choices. The interface language follows your system.
-
-## Optional Flomo sync
-
-Flomo sync is off by default. Enabling it first explains how data is used. After you connect your own Flomo account, the app sends this note to Flomo over HTTPS and reads the linked memo to synchronize changes in both directions. Memo searches send your search terms to Flomo. Requests include your personal authorization token and the relevant memo identifiers. An existing connection keeps its previous syncing or paused state when you enable the feature again.
-
-The token is stored in macOS Keychain, not in notes or diagnostic reports. To protect against content loss, the app keeps sync state, comparison versions and backups before replacements on your Mac. The developer does not receive this sync content. Flomo is an independent third-party service. Its storage, retention and deletion practices are described in the [Flomo Privacy Policy](https://help.flomoapp.com/privacy.html).
-
-Turning off Flomo stops new sync requests. Requests already sent may finish. Both notes, the saved token and local backups remain; turning off the feature does not delete content from Flomo. You can manage or delete remote notes in Flomo and remove the saved token using macOS Keychain Access.
 
 ## Local diagnostics
 
@@ -56,9 +40,9 @@ Turning diagnostics off in Settings stops recording and retains existing records
 
 ## Retention and controls
 
-Notes and local sync backups remain until you edit or delete the corresponding files. Uninstalling the app does not guarantee removal of local data, system backups or Keychain tokens. Keep any notes you need before deleting data. Copies in system or other backup services must be managed separately.
+Notes remain until you edit or delete the corresponding files. Sync records, backups and Keychain tokens left by older versions are retained; this version does not read tokens or start synchronization. Uninstalling the app does not guarantee removal of local data, system backups or Keychain tokens. Keep any notes you need before deleting data. Copies in system or other backup services must be managed separately.
 
-The app does not include advertising, third-party analytics or cross-app tracking. Flomo sync and local diagnostics are controlled independently.
+The app does not include advertising, third-party analytics or cross-app tracking. Local diagnostics are controlled in Settings.
 
 ## Updates and contact
 

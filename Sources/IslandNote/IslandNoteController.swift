@@ -104,13 +104,9 @@ final class IslandPanel: NSPanel {
 @MainActor
 final class IslandNoteController: NSObject {
     private let store: NoteStore
-    private var sync: FlomoSync?
-    private let preferences: AppPreferences
-    private let canEnableSync: Bool
     private var statusMenu: StatusMenuController?
     private var settingsWindow: SettingsWindowController?
-    private var showingSyncSettings = false
-    private var syncSettingsInFlight = false
+    private var showingSettings = false
 
     // 窗口与岛体
     private var panel: IslandPanel!
@@ -179,11 +175,9 @@ final class IslandNoteController: NSObject {
     private var finishingCollapse = false
     private var monitors: [Any] = []
 
-    init(store: NoteStore, enableSync: Bool = true, diagnostics: InteractionDiagnostics? = nil, preferences: AppPreferences? = nil) {
+    init(store: NoteStore, diagnostics: InteractionDiagnostics? = nil) {
         self.store = store
-        self.preferences = preferences ?? (enableSync ? .shared : AppPreferences(defaults: nil))
-        self.canEnableSync = enableSync
-        self.diagnostics = diagnostics ?? (enableSync ? .shared : InteractionDiagnostics(defaults: nil, enabled: false))
+        self.diagnostics = diagnostics ?? .shared
         super.init()
         installMainMenu()
         setup()
@@ -203,8 +197,8 @@ final class IslandNoteController: NSObject {
         #endif
         #endif
         self.diagnostics.record(.checkpoint, state: diagnosticState())
-        if enableSync, self.preferences.flomoEnabled { setupSync() }
-        }
+        logger.info("Local note mode ready; cloud synchronization is unavailable")
+    }
 
     /// 主菜单 Edit：让 ⌘C/V/X/A/Z 走标准 responder，少一层拦截。
     private func installMainMenu() {
@@ -376,10 +370,8 @@ final class IslandNoteController: NSObject {
         editor.onRequestQuit = {
             NSApp.terminate(nil)
         }
-            editor.onRequestSync = { [weak self] in self?.showSyncSettings() }
         editor.onRequestSettings = { [weak self] in self?.showSettings() }
-        editor.setFlomoEnabled(preferences.flomoEnabled)
-            // 编辑器只覆盖可见形状（expandedRect）：底边 = 遮罩底边，
+        // 编辑器只覆盖可见形状（expandedRect）：底边 = 遮罩底边，
         // 原先铺满全窗口时底部 16px gutter 成了「滚得到但永远看不见」的死区。
         editor.frame = expandedRect
         editor.isHidden = true
@@ -984,11 +976,6 @@ final class IslandNoteController: NSObject {
         let settings = NSMenuItem(title: L10n.tr("Settings…"), action: #selector(showSettings), keyEquivalent: ",")
         settings.target = self
         menu.addItem(settings)
-        if preferences.flomoEnabled {
-            let syncItem = NSMenuItem(title: L10n.tr("Flomo Sync…"), action: #selector(showSyncSettings), keyEquivalent: "")
-            syncItem.target = self
-            menu.addItem(syncItem)
-        }
         menu.addItem(.separator())
         let quit = NSMenuItem(title: L10n.tr("Quit Island Note"), action: #selector(quitAction), keyEquivalent: "q")
         quit.keyEquivalentModifierMask = [.command]
@@ -1016,17 +1003,7 @@ final class IslandNoteController: NSObject {
     @objc func showSettings() {
         collapse()
         if settingsWindow == nil {
-            let settings = SettingsWindowController(preferences: preferences, diagnostics: diagnostics)
-            settings.onFlomoToggle = { [weak self] in self?.setFlomoEnabled($0) ?? false }
-            settings.onConfigureFlomo = { [weak self] in self?.showSyncSettings() }
-            settings.automaticSyncIsPaused = { [weak self] in
-                guard let sync = self?.sync, !sync.isStopped, !sync.isBusy, sync.record.memoID != nil else { return nil }
-                return !sync.record.enabled
-            }
-            settings.onToggleAutomaticSync = { [weak self] in
-                guard let sync = self?.sync, !sync.isStopped, !sync.isBusy else { return }
-                if sync.record.enabled { sync.pause() } else { sync.resume() }
-            }
+            let settings = SettingsWindowController(diagnostics: diagnostics)
             settings.onDiagnosticToggle = { [weak self] in self?.toggleDiagnostics() }
             settings.onExportDiagnostics = { [weak self] in self?.exportDiagnostics() }
             settings.onClearDiagnostics = { [weak self] in
@@ -1036,13 +1013,12 @@ final class IslandNoteController: NSObject {
                 #endif
             }
             settings.onPrivacy = { [weak self] in self?.showPrivacyPolicy() }
-            settings.onClose = { [weak self] in self?.showingSyncSettings = false }
+            settings.onClose = { [weak self] in self?.showingSettings = false }
             settings.onOpenNote = { [weak self] in self?.chooseNoteFile(saveCopy: false) }
             settings.onSaveNoteAs = { [weak self] in self?.chooseNoteFile(saveCopy: true) }
-            settings.onImportConnection = { [weak self] in self?.importPreviousConnection() }
             settingsWindow = settings
         }
-        showingSyncSettings = true
+        showingSettings = true
         settingsWindow?.notePath = store.path
         settingsWindow?.rebuild()
         NSApp.activate(ignoringOtherApps: true)
@@ -1074,27 +1050,17 @@ final class IslandNoteController: NSObject {
     }
 
     private func switchNote(to url: URL, saveCopy: Bool) {
-        guard sync?.isBusy != true else { showFileError(L10n.tr("Wait for the current sync to finish, then switch files.")); return }
         editor.flushPending()
         guard store.flushSync() else { return }
         do {
-            try store.prepareSyncState()
-            sync?.stop()
             let text = try saveCopy ? store.saveCopyAndSwitch(to: url) : store.openExisting(url)
-            sync = nil
-            store.onSyncNeeded = nil
             editor.openDocument(text)
             editor.setEditingEnabled(true)
-            editor.setFlomoEnabled(preferences.flomoEnabled)
-            if preferences.flomoEnabled { setupSync() }
             settingsWindow?.notePath = store.path
             settingsWindow?.rebuild()
             logger.info("Note file selection completed")
         } catch {
             // The store commits its new path only after validation and persistence.
-            sync?.stop(); sync = nil
-            store.onSyncNeeded = nil
-            if preferences.flomoEnabled { setupSync() }
             showFileError(error.localizedDescription)
         }
     }
@@ -1104,50 +1070,6 @@ final class IslandNoteController: NSObject {
         alert.messageText = L10n.tr("Note file could not be changed")
         alert.informativeText = message
         alert.runModal()
-    }
-
-    private func importPreviousConnection() {
-        guard sync?.isBusy != true else { showFileError(L10n.tr("Wait for the current sync to finish, then switch files.")); return }
-        let picker = NSOpenPanel()
-        picker.title = L10n.tr("Restore Previous Flomo Connection…")
-        picker.message = L10n.tr("First open your original note file. Then choose the old IslandNote folder in Library/Application Support. Its connection will be restored paused so you can review before resuming.")
-        picker.canChooseFiles = false
-        picker.canChooseDirectories = true
-        picker.allowsMultipleSelection = false
-        guard picker.runModal() == .OK, let directory = picker.url else { return }
-        let accessed = directory.startAccessingSecurityScopedResource()
-        defer { if accessed { directory.stopAccessingSecurityScopedResource() } }
-        do {
-            try store.importPreviousConnection(from: directory)
-            sync?.stop(); sync = nil
-            store.onSyncNeeded = nil
-            preferences.setFlomoEnabled(true)
-            editor.setFlomoEnabled(true)
-            setupSync()
-            showSyncSettings()
-        } catch { showFileError(error.localizedDescription) }
-    }
-
-    @discardableResult
-    func setFlomoEnabled(_ enabled: Bool) -> Bool {
-        guard enabled != preferences.flomoEnabled else { return true }
-        if enabled {
-            let alert = NSAlert()
-            alert.messageText = L10n.tr("Enable Flomo Sync?")
-            alert.informativeText = L10n.tr("After you connect, this note and any memo searches are sent directly to Flomo. Your token stays in Keychain. An existing connection keeps its previous syncing or paused state. Local note-taking works without Flomo.")
-            alert.addButton(withTitle: L10n.tr("Enable Flomo"))
-            alert.addButton(withTitle: L10n.tr("Cancel"))
-            guard alert.runModal() == .alertFirstButtonReturn else { return false }
-        }
-        preferences.setFlomoEnabled(enabled)
-        if enabled {
-            editor.setFlomoEnabled(true)
-            if canEnableSync { setupSync() }
-        } else {
-            sync?.stop()
-            editor.setFlomoEnabled(false)
-        }
-        return true
     }
 
     @objc private func showPrivacyPolicy() { collapse(); PrivacyPolicyWindow.show() }
@@ -1194,8 +1116,6 @@ final class IslandNoteController: NSObject {
             if let updatedText = try store.refreshIfClean() {
                 editor.string = updatedText
                 editor.setEditingEnabled(true)
-                // A real external edit follows the same quiet period as typing.
-                if preferences.flomoEnabled { sync?.localChanged() }
             }
         } catch {
             editor.showSaveError(L10n.format("Could not read %@: %@", store.path, error.localizedDescription))
@@ -1210,7 +1130,7 @@ final class IslandNoteController: NSObject {
     }
 
     private var isAuxiliaryWindowOpen: Bool {
-        showingSyncSettings || syncSettingsInFlight || PrivacyPolicyWindow.isVisible
+        showingSettings || PrivacyPolicyWindow.isVisible
     }
 
     func collapse(automatically: Bool = false) {
@@ -1246,69 +1166,6 @@ final class IslandNoteController: NSObject {
         EventDeliveryProbe.shared.flush()
         #endif
     }
-
-    private func setupSync() {
-        guard preferences.flomoEnabled, canEnableSync else { return }
-        do {
-            if let sync {
-                sync.allowConnections()
-                if let token = try FlomoCredential.load() { sync.start(client: FlomoClient(token: token)) }
-                else { editor.showSyncStatus(.disconnected, detail: L10n.tr("Connect your Flomo account in Settings.")) }
-                return
-            }
-            try store.prepareSyncState()
-            let sync = try FlomoSync(stateURL: store.syncStateURL)
-            self.sync = sync
-            sync.onStatus = { [weak self] phase, detail in
-                guard let self, self.preferences.flomoEnabled else { return }
-                self.editor.showSyncStatus(phase, detail: detail)
-            }
-            sync.readLocal = { [weak self] in
-                guard let self else { throw SyncFailure.localUnavailable }
-                guard !self.editor.hasMarkedText else { throw SyncFailure.localChanged }
-                self.editor.flushPending()
-                guard self.store.flushSync() else { throw SyncFailure.localUnavailable }
-                if let updated = try self.store.refreshIfClean() { self.editor.replaceFromSync(updated) }
-                return self.editor.string
-            }
-            sync.localUpdatedAt = { [weak self] in self?.store.modifiedAt }
-            sync.applyRemote = { [weak self, weak sync] expected, replacement in
-                guard let self, let sync else { throw SyncFailure.localUnavailable }
-                self.editor.flushPending()
-                guard self.editor.string == expected, self.store.flushSync() else { throw SyncFailure.localChanged }
-                try sync.backup(expected, name: "island-note-before-pull")
-                try self.store.applySyncedText(replacement, expected: expected)
-                self.editor.replaceFromSync(replacement)
-            }
-            store.onSyncNeeded = { [weak sync] in sync?.localChanged() }
-            if let token = try FlomoCredential.load() { sync.start(client: FlomoClient(token: token)) }
-        } catch {
-            editor.showSyncStatus(.failed, detail: L10n.format("Flomo setup unavailable: %@", error.localizedDescription))
-        }
-    }
-
-    @objc func showSyncSettings() {
-        guard !syncSettingsInFlight else { return }
-        guard preferences.flomoEnabled else { showSettings(); return }
-        guard let sync else {
-            collapse()
-            FlomoSettings.error(L10n.tr("Sync settings could not be loaded. Your local note is still available.")); return
-        }
-        presentSyncSettings(sync)
-    }
-
-    func presentSyncSettings(_ sync: FlomoSync) {
-        guard !syncSettingsInFlight else { return }
-        collapse()
-        editor.flushPending()
-        guard store.flushSync() else { return }
-        syncSettingsInFlight = true
-        Task { [weak self] in
-            defer { self?.syncSettingsInFlight = false }
-            await FlomoSettings.show(sync)
-        }
-    }
-
 
     /// 只动画遮罩形状（顶边恒定）。expanded 用弹簧回弹。
     private func goTo(_ m: Mode) {

@@ -348,3 +348,7 @@
 "Setext headings and horizontal rules" = "Setext headings and horizontal rules";
 "Italic formatting" = "Italic formatting";
 "Use consistent 2- or 4-space list indentation before syncing. Your local text is still saved." = "Use consistent 2- or 4-space list indentation before syncing. Your local text is still saved.";
+
+// Local note file actions
+"Save this note at a new location. The previous file is kept." = "Save this note at a new location. The previous file is kept.";
+"Edit an existing file and save back to it." = "Edit an existing file and save back to it.";

@@ -348,3 +348,7 @@
 "Setext headings and horizontal rules" = "下划线式标题和水平分隔线";
 "Italic formatting" = "斜体";
 "Use consistent 2- or 4-space list indentation before syncing. Your local text is still saved." = "请使用一致的每层 2 或 4 个空格缩进后再同步，本机原文仍会保存。";
+
+// Local note file actions
+"Save this note at a new location. The previous file is kept." = "将笔记保存到新位置，原文件会保留。";
+"Edit an existing file and save back to it." = "打开已有文件并将修改保存回原文件。";

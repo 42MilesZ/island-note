@@ -115,39 +115,12 @@ final class NoteStore {
     /// Save a new copy and switch to it. Never truncate an existing destination.
     func saveCopyAndSwitch(to url: URL) throws -> String {
         guard flushSync(), let text = lastLoadedContent else { throw SaveError.documentNotLoaded }
-        try prepareSyncState()
         let accessed = url.startAccessingSecurityScopedResource()
         defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-        let destinationState = syncStateURL(for: url)
-        let previousState = syncStateURL
-        let previousData = try FileManager.default.fileExists(atPath: previousState.path) ? Data(contentsOf: previousState) : nil
-        // A save-location change keeps this logical note's connection. A stale
-        // destination connection must never silently replace or redirect it.
-        guard !FileManager.default.fileExists(atPath: destinationState.path) else { throw CocoaError(.fileWriteFileExists) }
         try Data(text.utf8).write(to: url, options: .withoutOverwriting)
-        var destinationCreated = false
-        do {
-            if let previousData {
-                // Pause first: interruption must never leave two active writers.
-                var paused = try JSONDecoder().decode(SyncRecord.self, from: previousData)
-                paused.enabled = false
-                try JSONEncoder().encode(paused).write(to: previousState, options: .atomic)
-                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: previousState.path)
-                try FileManager.default.createDirectory(at: destinationState.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try previousData.write(to: destinationState, options: .withoutOverwriting)
-                destinationCreated = true
-                try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: destinationState.path)
-            }
-            return try openExisting(url)
-        } catch {
-            // Selection persistence failed: retain the old connection and leave
-            // the new Markdown copy intact, without a second active connection.
-            if let previousData {
-                if destinationCreated { try FileManager.default.removeItem(at: destinationState) }
-                try previousData.write(to: previousState, options: .atomic)
-            }
-            throw error
-        }
+        // Keep the copy if selection persistence fails. Legacy cloud records are
+        // recovery data only; local file operations never read or rewrite them.
+        return try openExisting(url)
     }
 
     var syncStateURL: URL { syncStateURL(for: fileURL) }

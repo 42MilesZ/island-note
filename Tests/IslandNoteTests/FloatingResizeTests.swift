@@ -25,7 +25,7 @@ final class FloatingResizeTests: XCTestCase {
         let existing = Set(NSApp.windows.map(ObjectIdentifier.init))
         let previousMenu = NSApp.mainMenu
         defer { NSApp.mainMenu = previousMenu }
-        let controller = IslandNoteController(store: NoteStore(fileURL: note), enableSync: false, diagnostics: diagnostics)
+        let controller = IslandNoteController(store: NoteStore(fileURL: note), diagnostics: diagnostics ?? InteractionDiagnostics(defaults: nil, enabled: false))
         let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? IslandPanel }.first { !existing.contains(ObjectIdentifier($0)) })
         defer { panel.close() }
         controller.expand()
@@ -537,6 +537,28 @@ final class FloatingResizeTests: XCTestCase {
         }
     }
 
+    func testSavedFlomoOptInCannotRestoreSyncEntryInLocalApp() throws {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: AppPreferences.flomoKey)
+        defer {
+            if let previous { defaults.set(previous, forKey: AppPreferences.flomoKey) }
+            else { defaults.removeObject(forKey: AppPreferences.flomoKey) }
+        }
+        defaults.set(true, forKey: AppPreferences.flomoKey)
+        try withPanel { _, panel, editor, _ in
+            XCTAssertNil(editor.onRequestSync)
+            let button = try XCTUnwrap(find(StatusIndicatorButton.self, in: editor))
+            try clickStatus(button, in: panel)
+            settle(0.3)
+            let settings = try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.windowController is SettingsWindowController })
+            defer { settings.close() }
+            func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+            let controls = descendants(try XCTUnwrap(settings.contentView))
+            XCTAssertFalse(controls.compactMap { $0 as? NSButton }.contains { $0.accessibilityIdentifier() == "settings.flomo" })
+            XCTAssertTrue(defaults.bool(forKey: AppPreferences.flomoKey), "Retain the personal version's opt-in without acting on it.")
+        }
+    }
+
     func testSettingsRetractDockedAndFloatingPanelAndDoNotCancelQueuedCollapse() throws {
         try withPanel { controller, panel, editor, _ in
             let initial = editor.frame
@@ -568,46 +590,6 @@ final class FloatingResizeTests: XCTestCase {
             XCTAssertEqual(controller.mode, .rest)
             XCTAssertEqual(panel.level, .screenSaver)
             settings.close()
-        }
-    }
-
-    func testConflictConfirmationRetractsNoteAndKeepsItRetractedUntilClosed() throws {
-        try withPanel { controller, panel, editor, _ in
-            let folder = FileManager.default.temporaryDirectory.appendingPathComponent("island-review-" + UUID().uuidString)
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            defer { try? FileManager.default.removeItem(at: folder) }
-            let url = folder.appendingPathComponent("sync.json")
-            try JSONEncoder().encode(SyncRecord(enabled: true, memoID: "fixture", baseline: "Base", remoteBaseline: "Base")).write(to: url)
-            let sync = try FlomoSync(stateURL: url)
-            defer { sync.stop() }
-            sync.readLocal = { editor.string }
-            sync.start(client: ConflictReviewClient())
-            settle(0.2)
-            _ = try XCTUnwrap(sync.conflict)
-            sync.pause()
-            let initial = editor.frame
-            controller.collapse(automatically: true)
-            editor.setFlomoEnabled(true)
-            editor.showSyncStatus(.conflict, detail: "Conflict fixture")
-            editor.onRequestSync = { [weak controller, weak sync] in
-                if let sync { controller?.presentSyncSettings(sync) }
-            }
-            try clickStatus(try XCTUnwrap(find(StatusIndicatorButton.self, in: editor)), in: panel)
-            settle(0.3)
-            let review = try XCTUnwrap(NSApp.windows.first { $0.isVisible && $0.windowController is FlomoConflictWindowController })
-            defer { review.close() }
-            XCTAssertTrue(editor.isHidden)
-            XCTAssertEqual(controller.mode, .rest)
-            let hover = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved,
-                location: NSPoint(x: initial.midX, y: initial.maxY - 15), modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
-                context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
-            NSApp.sendEvent(hover); settle(0.1)
-            XCTAssertEqual(controller.mode, .rest)
-            review.performClose(nil); settle(0.2)
-            XCTAssertEqual(controller.mode, .rest, "Closing confirmation must not reopen the note")
-            NSApp.sendEvent(hover); settle(0.8)
-            XCTAssertEqual(controller.mode, .expanded)
         }
     }
 
@@ -709,19 +691,5 @@ final class FloatingResizeTests: XCTestCase {
             XCTAssertTrue(text.isVerticallyResizable)
             print("Document-end resize fixture: mean \(durations.reduce(0, +) / Double(durations.count) * 1000) ms, max \(durations.max()! * 1000) ms")
         }
-    }
-}
-
-@MainActor
-private final class ConflictReviewClient: FlomoServing {
-    func fetch(id: String) async throws -> FlomoMemo {
-        FlomoMemo(id: id, content: "Remote fixture", updatedAt: "v1")
-    }
-    func create(content: String) async throws -> String {
-        XCTFail("Review must not create a memo")
-        return "fixture"
-    }
-    func update(id: String, content: String, updatedAt: String) async throws {
-        XCTFail("Review must not update a memo")
     }
 }
