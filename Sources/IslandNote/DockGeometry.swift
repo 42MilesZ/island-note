@@ -31,29 +31,55 @@ struct NotchMetrics: Equatable {
 }
 
 /// 停靠态岛体（休息 / 悬停）的几何，坐标系为面板画布（原点左下，`canvasTop` 为屏幕最顶）。
+///
+/// 无刘海时休息态完全不可见：常驻黑条在半透明菜单栏上像显示缺陷，也会遮住菜单栏内容。
+/// 指针进入 `revealZone` 时只从顶边探出一条细边（`hover`）作为提示，推到顶边或稍作停留再展开。
 struct DockBarLayout: Equatable {
     /// 无刘海时作为停靠锚点的名义尺寸，也是有刘海时的下限。
     static let fallbackNotchWidth: CGFloat = 200
     static let minimumHeight: CGFloat = 33
+    /// 无刘海时的探头细边。
+    static let peekHeight: CGFloat = 6
+    static let peekWidthRatio: CGFloat = 0.6
+    /// 菜单栏自动隐藏时 visibleFrame 不再扣除菜单栏，感应区退化为顶边这一条。
+    static let minimumRevealDepth: CGFloat = 8
+    /// 指针被屏幕顶边挡住的那几行：在这里视为明确想打开，无需停留。
+    static let edgeDepth: CGFloat = 3
 
     let notch: NotchMetrics
     /// 停靠锚点与有刘海时的休息态胶囊。
     let rest: NSRect
     let hover: NSRect
+    /// 无刘海时的悬停感应区：岛体宽度、菜单栏高度。
+    let revealZone: NSRect
 
-    init(notch: NotchMetrics, canvasWidth: CGFloat, canvasTop: CGFloat) {
+    init(notch: NotchMetrics, canvasWidth: CGFloat, canvasTop: CGFloat, menuBarHeight: CGFloat = 0) {
         self.notch = notch
         let notchWidth = notch.size?.width ?? Self.fallbackNotchWidth
         let width = max(notchWidth * 1.06, 210) - 11
         // One extra point below the hardware notch keeps its lower edge covered on every scale.
         let height = notch.size.map { max(Self.minimumHeight, ceil($0.height) + 1) } ?? Self.minimumHeight
         rest = NSRect(x: (canvasWidth - width) / 2, y: canvasTop - height, width: width, height: height)
-        hover = NSRect(x: rest.minX - 7, y: rest.minY - 4, width: rest.width + 14, height: rest.height + 4)
+        if notch.hasNotch {
+            hover = NSRect(x: rest.minX - 7, y: rest.minY - 4, width: rest.width + 14, height: rest.height + 4)
+        } else {
+            let peekWidth = (rest.width * Self.peekWidthRatio).rounded()
+            hover = NSRect(x: rest.midX - peekWidth / 2, y: canvasTop - Self.peekHeight,
+                           width: peekWidth, height: Self.peekHeight)
+        }
+        let depth = max(menuBarHeight, Self.minimumRevealDepth)
+        // The pointer can report the top row at canvasTop itself; include it.
+        revealZone = NSRect(x: rest.minX - 14, y: canvasTop - depth, width: rest.width + 28, height: depth + 1)
     }
 
     /// 休息态实际显示的轮廓：有刘海时包住刘海；无刘海时收成贴住屏幕顶边的零高度形状，
     /// 展开 / 收起仍能从顶边伸缩，静置时不留下任何黑块。
     var restVisible: NSRect {
         notch.hasNotch ? rest : NSRect(x: rest.minX, y: rest.maxY, width: rest.width, height: 0)
+    }
+
+    /// 点（画布坐标）是否已贴到屏幕顶边。
+    func isAtTopEdge(_ point: NSPoint) -> Bool {
+        revealZone.contains(point) && point.y >= rest.maxY - Self.edgeDepth
     }
 }

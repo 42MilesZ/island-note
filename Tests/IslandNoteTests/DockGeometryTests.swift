@@ -50,6 +50,25 @@ final class DockGeometryTests: XCTestCase {
         XCTAssertEqual(path.boundingBoxOfPath.height, 0, accuracy: 0.001)
     }
 
+    func testPeekAndRevealZoneWithoutNotch() {
+        let none = NotchMetrics(screenWidth: 1920, safeAreaTop: 0, topLeftArea: nil, topRightArea: nil)
+        let layout = DockBarLayout(notch: none, canvasWidth: 1000, canvasTop: 900, menuBarHeight: 24)
+        XCTAssertEqual(layout.hover.height, DockBarLayout.peekHeight)
+        XCTAssertEqual(layout.hover.maxY, 900)
+        XCTAssertEqual(layout.hover.midX, layout.rest.midX)
+        XCTAssertLessThan(layout.hover.width, layout.rest.width)
+        XCTAssertEqual(layout.revealZone.minY, 876, "The zone spans the menu bar")
+        XCTAssertTrue(layout.revealZone.contains(NSPoint(x: 500, y: 880)))
+        XCTAssertFalse(layout.revealZone.contains(NSPoint(x: 500, y: 870)), "Window content below stays inert")
+        XCTAssertFalse(layout.revealZone.contains(NSPoint(x: layout.rest.maxX + 20, y: 890)))
+        XCTAssertTrue(layout.isAtTopEdge(NSPoint(x: 500, y: 899)))
+        XCTAssertTrue(layout.isAtTopEdge(NSPoint(x: 500, y: 900)))
+        XCTAssertFalse(layout.isAtTopEdge(NSPoint(x: 500, y: 890)))
+
+        let autoHidden = DockBarLayout(notch: none, canvasWidth: 1000, canvasTop: 900, menuBarHeight: 0)
+        XCTAssertEqual(autoHidden.revealZone.minY, 900 - DockBarLayout.minimumRevealDepth)
+    }
+
     private func metrics(width: CGFloat, height: CGFloat) -> NotchMetrics {
         let side = (1512 - width) / 2
         return NotchMetrics(screenWidth: 1512, safeAreaTop: height,

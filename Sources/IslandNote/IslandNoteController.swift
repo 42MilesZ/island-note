@@ -174,6 +174,11 @@ final class IslandNoteController: NSObject {
     private(set) var mode: Mode = .rest
 
     private var pendingCollapse: DispatchWorkItem?
+    /// 无刘海时在感应区停留后展开；推到顶边则立即展开。
+    private var pendingReveal: DispatchWorkItem?
+    private let revealDwell: TimeInterval = 0.2
+    /// 在感应区内点击说明用户在用菜单栏，离开感应区前不再探头。
+    private var revealSuppressed = false
     private var finishingCollapse = false
     private var menuOpenHoverGate = MenuOpenHoverGate()
     private var menuOpenTimer: Timer?
@@ -256,12 +261,13 @@ final class IslandNoteController: NSObject {
     private func layoutDock(on screen: NSScreen) {
         screenFrame = screen.frame
         let notch = measureNotch(screen)
-        dockLayout = DockBarLayout(notch: notch, canvasWidth: eW, canvasTop: canvasTop)
+        dockLayout = DockBarLayout(notch: notch, canvasWidth: eW, canvasTop: canvasTop,
+                                   menuBarHeight: screen.frame.maxY - screen.visibleFrame.maxY)
         let rest = dockLayout.rest
         if let size = notch.size {
             dockLogger.info("Dock on notched screen \(screen.localizedName, privacy: .public): notch=\(size.width, privacy: .public)x\(size.height, privacy: .public)pt scale=\(screen.backingScaleFactor, privacy: .public) island=\(rest.width, privacy: .public)x\(rest.height, privacy: .public)pt")
         } else {
-            dockLogger.info("Dock on screen without notch \(screen.localizedName, privacy: .public): resting island hidden, open from the menu bar")
+            dockLogger.info("Dock on screen without notch \(screen.localizedName, privacy: .public): resting island hidden, reveal zone=\(self.dockLayout.revealZone.width, privacy: .public)x\(self.dockLayout.revealZone.height, privacy: .public)pt")
         }
     }
 
@@ -276,9 +282,48 @@ final class IslandNoteController: NSObject {
         case .expanded: return dragInteraction.path(for: expandedRect)
         case .rest: return restPath()
         case .hover:
+            guard hasNotch else { return notchPath(hoverRect, topR: 0, botR: DockBarLayout.peekHeight / 2) }
             let (top, bottom) = radii(for: m)
             return notchPath(hoverRect, topR: top, botR: bottom)
         }
+    }
+
+    /// 屏幕坐标转停靠画布坐标；停靠位置由屏幕决定，不受面板悬浮位置影响。
+    private func dockCanvasPoint(_ screenPoint: NSPoint) -> NSPoint {
+        NSPoint(x: screenPoint.x - (screenFrame.midX - eW / 2), y: screenPoint.y - (screenFrame.maxY - canvasTop))
+    }
+
+    private func cancelReveal() {
+        pendingReveal?.cancel()
+        pendingReveal = nil
+    }
+
+    /// 无刘海屏幕的悬停：进入感应区探出细边，贴顶边立即展开，否则停留片刻后展开。
+    private func handleRevealHover(at screenPoint: NSPoint) {
+        let point = dockCanvasPoint(screenPoint)
+        guard dockLayout.revealZone.contains(point) else {
+            revealSuppressed = false
+            if mode == .hover { goTo(.rest) }
+            return
+        }
+        guard !revealSuppressed else { return }
+        if dockLayout.isAtTopEdge(point) {
+            dockLogger.debug("Reveal: pointer reached the top edge")
+            expand()
+            return
+        }
+        if mode == .rest { goTo(.hover) }
+        guard pendingReveal == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingReveal = nil
+            // Leaving the zone returns to rest and cancels this item, so hover implies presence.
+            guard self.mode == .hover, !self.revealSuppressed else { return }
+            self.dockLogger.debug("Reveal: pointer rested in the zone")
+            self.expand()
+        }
+        pendingReveal = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + revealDwell, execute: work)
     }
 
     /// 无刘海时收起的岛体不可见，也不应拦截菜单栏中央的点击。
@@ -504,7 +549,7 @@ final class IslandNoteController: NSObject {
     private func updateDockScreen() {
         let screen = notchScreen()
         layoutDock(on: screen)
-        if !hasNotch, mode == .hover { mode = .rest }
+        if mode == .hover { cancelReveal(); mode = .rest }
         let origin = NSPoint(x: screenFrame.midX - eW / 2, y: screenFrame.maxY - canvasTop)
         dragInteraction.updateDock(anchorRect: restRect.offsetBy(dx: origin.x, dy: origin.y), origin: origin)
         if dragInteraction.isFloating, !dragInteraction.isInteracting {
@@ -533,6 +578,7 @@ final class IslandNoteController: NSObject {
         menuOpenTimer?.invalidate()
         resizeTimer?.invalidate()
         pendingCollapse?.cancel()
+        pendingReveal?.cancel()
         for monitor in monitors { NSEvent.removeMonitor(monitor) }
         if let displayObservation { NotificationCenter.default.removeObserver(displayObservation) }
         if let panelFocusObservation { NotificationCenter.default.removeObserver(panelFocusObservation) }
@@ -964,9 +1010,11 @@ final class IslandNoteController: NSObject {
                 pendingCollapse = work
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
             }
+        case .rest where !hasNotch, .hover where !hasNotch:
+            handleRevealHover(at: loc)
         case .rest:
-            // 悬浮岛体区域 → 立刻弹出；无刘海时休息态不可见，只从菜单栏打开
-            if hasNotch, screenRect(restRect).insetBy(dx: -14, dy: -10).contains(loc) {
+            // 悬浮岛体区域 → 立刻弹出
+            if screenRect(restRect).insetBy(dx: -14, dy: -10).contains(loc) {
                 expand()
             }
         case .hover:
@@ -987,8 +1035,15 @@ final class IslandNoteController: NSObject {
             if !screenRect(rect(for: .expanded)).insetBy(dx: -8, dy: -8).contains(loc) {
                 collapse(automatically: true)
             }
+        case .rest where !hasNotch, .hover where !hasNotch:
+            // The click belongs to the menu bar beneath the invisible island.
+            if dockLayout.revealZone.contains(dockCanvasPoint(loc)) {
+                revealSuppressed = true
+                cancelReveal()
+                if mode == .hover { goTo(.rest) }
+            }
         case .rest, .hover:
-            if hasNotch, screenRect(rect(for: mode)).insetBy(dx: -8, dy: -8).contains(loc) {
+            if screenRect(rect(for: mode)).insetBy(dx: -8, dy: -8).contains(loc) {
                 expand()
             }
         }
@@ -1237,6 +1292,7 @@ final class IslandNoteController: NSObject {
         pendingDockedSize = nil
         pendingCollapse?.cancel()
         pendingCollapse = nil
+        if m != .hover { cancelReveal() }
         mode = m
         if m != .expanded {
             menuOpenTimer?.invalidate()
