@@ -1,0 +1,141 @@
+diff --git a/Sources/IslandNote/AppDelegate.swift b/Sources/IslandNote/AppDelegate.swift
+index 7875b7a..afc9d70 100644
+--- a/Sources/IslandNote/AppDelegate.swift
++++ b/Sources/IslandNote/AppDelegate.swift
+@@ -7,8 +7,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
+     private let logger = Logger(subsystem: "local.projects.island-note", category: "ApplicationLifecycle")
+ 
+     func applicationDidFinishLaunching(_ notification: Notification) {
+-        store = NoteStore()
++        let env = ProcessInfo.processInfo.environment
++        if let note = env["ISLAND_SHOTS_NOTE"], let config = env["ISLAND_SHOTS_CONFIG"] {
++            store = NoteStore(fileURL: URL(fileURLWithPath: note), configurationDirectory: URL(fileURLWithPath: config))
++        } else {
++            store = NoteStore()
++        }
+         controller = IslandNoteController(store: store)
++        if let state = env["ISLAND_SHOTS_STATE"], let out = env["ISLAND_SHOTS_OUT"] {
++            controller.runShots(state: state, output: out)
++        }
+         logger.info("Application ready with menu bar commands")
+     }
+ 
+diff --git a/Sources/IslandNote/AppPreferences.swift b/Sources/IslandNote/AppPreferences.swift
+index bc47d08..f89cdaf 100644
+--- a/Sources/IslandNote/AppPreferences.swift
++++ b/Sources/IslandNote/AppPreferences.swift
+@@ -12,6 +12,12 @@ final class AppPreferences {
+     private(set) var flomoEnabled: Bool
+ 
+     init(defaults: UserDefaults?, legacyStateURL: URL? = nil) {
++        if ProcessInfo.processInfo.environment["ISLAND_SHOTS_NOTE"] != nil {
++            // Screenshot harness: never touch flomo or the real sync state.
++            self.defaults = nil
++            flomoEnabled = false
++            return
++        }
+         self.defaults = defaults
+         if defaults?.object(forKey: Self.flomoKey) == nil, let legacyStateURL,
+            let data = try? Data(contentsOf: legacyStateURL),
+diff --git a/Sources/IslandNote/IslandNoteController.swift b/Sources/IslandNote/IslandNoteController.swift
+index 06d9254..99bebe7 100644
+--- a/Sources/IslandNote/IslandNoteController.swift
++++ b/Sources/IslandNote/IslandNoteController.swift
+@@ -918,6 +918,7 @@ final class IslandNoteController: NSObject {
+     // MARK: - 悬停 / 点击
+ 
+     func handleHover(_ event: NSEvent? = nil) {
++        guard !Self.shotsPinned else { return }
+         guard !dragInteraction.preventsCollapse else { return }
+         guard mode == .expanded || !isAuxiliaryWindowOpen else { return }
+         // Shrinking can move the edge past a stationary pointer. Wait for the
+@@ -961,6 +962,7 @@ final class IslandNoteController: NSObject {
+     }
+ 
+     private func handleClick(_ e: NSEvent?) {
++        guard !Self.shotsPinned else { return }
+         guard !menuOpenHoverGate.isActive else { return }
+         guard !dragInteraction.preventsCollapse else { return }
+         guard mode == .expanded || !isAuxiliaryWindowOpen else { return }
+@@ -1172,6 +1174,7 @@ final class IslandNoteController: NSObject {
+     }
+ 
+     func collapse(automatically: Bool = false) {
++        guard !(automatically && Self.shotsPinned) else { return }
+         guard !automatically || menuOpenTimer == nil else { return }
+         if dragInteraction.preventsCollapse {
+             guard !automatically else { return }
+@@ -1330,3 +1333,73 @@ final class EdgeFeatherView: NSView {
+         NSGradient(colors: [NSColor.black, clear])!.draw(in: rightRect, angle: 180)
+     }
+ }
++
++// MARK: - App Store screenshot harness (env-driven, never active in normal launches)
++extension IslandNoteController {
++    static var shotsPinned = false
++
++    func runShots(state: String, output: String) {
++        Self.shotsPinned = true
++        let after: (Double, @escaping () -> Void) -> Void = { t, f in DispatchQueue.main.asyncAfter(deadline: .now() + t, execute: f) }
++        let parts = state.split(separator: ":").map(String.init)
++        let kind = parts[0]
++        let dx = parts.count > 1 ? CGFloat(Double(parts[1]) ?? 0) : 420
++        let dy = parts.count > 2 ? CGFloat(Double(parts[2]) ?? 0) : -300
++        switch kind {
++        case "rest":
++            after(1.5) { self.dumpShots(output) }
++        case "hover":
++            after(1.0) { self.goTo(.hover) }
++            after(2.5) { self.dumpShots(output) }
++        case "expanded":
++            after(1.0) { self.expand() }
++            after(3.0) { self.dumpShots(output) }
++        case "settings":
++            after(1.0) { self.showSettings() }
++            after(3.0) { self.dumpShots(output) }
++        case "floating", "docking":
++            after(1.0) { self.expand() }
++            after(2.5) {
++                let r = self.screenRect(self.rect(for: .expanded))
++                let start = NSPoint(x: r.midX - 60, y: r.maxY - 12)
++                self.dragInteraction.begin(at: start)
++                var path: [NSPoint] = []
++                for i in 1...40 { let t = CGFloat(i) / 40; path.append(NSPoint(x: start.x + dx * t, y: start.y + dy * t)) }
++                if kind == "docking" {
++                    let back = parts.count > 3 ? CGFloat(Double(parts[3]) ?? 0) : 0.8
++                    for i in 1...30 { let t = CGFloat(i) / 30 * back; path.append(NSPoint(x: start.x + dx * (1 - t), y: start.y + dy * (1 - t))) }
++                }
++                for (i, p) in path.enumerated() {
++                    after(Double(i) * 0.016) { self.dragInteraction.move(to: p) }
++                }
++                if kind == "floating" {
++                    after(Double(path.count) * 0.016 + 0.1) { self.dragInteraction.end(at: path.last!) }
++                }
++            }
++            after(5.5) { self.dumpShots(output) }
++        default:
++            after(1.0) { self.dumpShots(output) }
++        }
++    }
++
++    private func dumpShots(_ output: String) {
++        func box(_ r: NSRect) -> [Double] { [r.minX, r.minY, r.width, r.height].map(Double.init) }
++        let windows = NSApp.windows.filter { $0.isVisible }.map { w -> [String: Any] in
++            ["number": w.windowNumber, "frame": box(w.frame), "class": String(describing: type(of: w)),
++             "title": w.title, "level": w.level.rawValue, "hasShadow": w.hasShadow]
++        }
++        let screens = NSScreen.screens.map { s -> [String: Any] in
++            var d: [String: Any] = ["frame": box(s.frame), "safeTop": Double(s.safeAreaInsets.top), "scale": Double(s.backingScaleFactor),
++                                    "visible": box(s.visibleFrame)]
++            if let l = s.auxiliaryTopLeftArea, let r = s.auxiliaryTopRightArea { d["auxLeft"] = box(l); d["auxRight"] = box(r) }
++            return d
++        }
++        let info: [String: Any] = ["mode": String(describing: mode), "floating": dragInteraction.isFloating,
++                                   "panelFrame": box(panel.frame), "expandedRect": box(screenRect(rect(for: .expanded))),
++                                   "restRect": box(screenRect(restRect)), "notchW": Double(notchW), "notchH": Double(notchH),
++                                   "windows": windows, "screens": screens]
++        if let data = try? JSONSerialization.data(withJSONObject: info, options: [.prettyPrinted, .sortedKeys]) {
++            try? data.write(to: URL(fileURLWithPath: output))
++        }
++    }
++}
