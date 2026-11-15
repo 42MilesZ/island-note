@@ -22,7 +22,7 @@ final class DockRevealTests: XCTestCase {
         let previousMenu = NSApp.mainMenu
         defer { NSApp.mainMenu = previousMenu }
         let notch = none
-        let controller = IslandNoteController(store: NoteStore(fileURL: note, configurationDirectory: directory),
+        let controller = IslandNoteController(store: NoteStore(fileURL: note, configurationDirectory: directory), enableSync: false,
             diagnostics: InteractionDiagnostics(defaults: nil, enabled: false), notchMetrics: { _ in notch })
         let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? IslandPanel }.first { !existing.contains(ObjectIdentifier($0)) })
         defer { panel.close() }
