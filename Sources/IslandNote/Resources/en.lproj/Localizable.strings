@@ -352,3 +352,4 @@
 // Local note file actions
 "Save this note at a new location. The previous file is kept." = "Save this note at a new location. The previous file is kept.";
 "Edit an existing file and save back to it." = "Edit an existing file and save back to it.";
+"%@ was moved, renamed or deleted. Open Settings and choose Open Existing File… to select it again." = "%@ was moved, renamed or deleted. Open Settings and choose Open Existing File… to select it again.";
