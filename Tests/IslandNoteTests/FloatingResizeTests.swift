@@ -617,28 +617,48 @@ final class FloatingResizeTests: XCTestCase {
         }
     }
 
-    func testScreenWithoutNotchHidesRestingIslandAndOpensFromMenu() throws {
+    func testScreenWithoutNotchHidesRestingIslandAndRevealsOnHover() throws {
         let none = NotchMetrics(screenWidth: 1920, safeAreaTop: 0, topLeftArea: nil, topRightArea: nil)
         try withPanel(notch: none) { controller, panel, editor, _ in
             XCTAssertFalse(controller.hasNotch)
             XCTAssertFalse(panel.ignoresMouseEvents, "An open note stays interactive")
             let initial = editor.frame
-            controller.collapse(); settle(1.1)
+            @MainActor func move(_ point: NSPoint) throws {
+                controller.handleHover(try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved, location: point,
+                    modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: 0, pressure: 0)))
+            }
+            let mask = try XCTUnwrap(panel.contentView?.subviews.first?.layer?.mask as? CAShapeLayer)
+            let outside = NSPoint(x: initial.midX, y: initial.maxY - 200)
+            let near = NSPoint(x: initial.midX, y: initial.maxY - 5)
+            let edge = NSPoint(x: initial.midX, y: initial.maxY - 1)
+
+            try move(outside); controller.collapse(); settle(1.1)
             XCTAssertEqual(controller.mode, .rest)
             XCTAssertTrue(panel.ignoresMouseEvents, "The hidden island must not swallow menu bar clicks")
-            let mask = try XCTUnwrap(panel.contentView?.subviews.first?.layer?.mask as? CAShapeLayer)
             XCTAssertEqual(try XCTUnwrap(mask.path).boundingBoxOfPath.height, 0, accuracy: 0.001)
 
-            let hover = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved,
-                location: NSPoint(x: initial.midX, y: initial.maxY - 15), modifierFlags: [],
-                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
-                context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
-            controller.handleHover(hover); settle(0.2)
-            XCTAssertEqual(controller.mode, .rest, "Hovering the empty menu bar centre does not open the note")
+            try move(near)
+            XCTAssertEqual(controller.mode, .hover, "Approaching the top centre peeks a thin edge")
+            XCTAssertTrue(panel.ignoresMouseEvents)
+            XCTAssertEqual(try XCTUnwrap(mask.path).boundingBoxOfPath.height, DockBarLayout.peekHeight, accuracy: 0.5)
+            try move(outside)
+            XCTAssertEqual(controller.mode, .rest, "Leaving the zone retracts the peek")
+            settle(0.4)
+            XCTAssertEqual(controller.mode, .rest, "A retracted peek never opens later")
+
+            try move(near); settle(0.5)
+            XCTAssertEqual(controller.mode, .expanded, "Resting in the zone opens the note")
+            XCTAssertFalse(panel.ignoresMouseEvents)
+            try move(outside); controller.collapse(); settle(1.1)
+
+            try move(edge)
+            XCTAssertEqual(controller.mode, .expanded, "Reaching the top edge opens immediately")
+            try move(outside); controller.collapse(); settle(1.1)
 
             controller.openFromStatusMenu(); settle(1.1)
-            XCTAssertEqual(controller.mode, .expanded)
-            XCTAssertFalse(panel.ignoresMouseEvents)
+            XCTAssertEqual(controller.mode, .expanded, "The menu bar icon still opens the note")
+            try move(outside); controller.collapse(); settle(1.1)
         }
     }
 
