@@ -33,7 +33,9 @@ struct NotchMetrics: Equatable {
 /// 停靠态岛体（休息 / 悬停）的几何，坐标系为面板画布（原点左下，`canvasTop` 为屏幕最顶）。
 ///
 /// 无刘海时休息态完全不可见：常驻黑条在半透明菜单栏上像显示缺陷，也会遮住菜单栏内容。
-/// 指针进入 `revealZone` 时只从顶边探出一条细边（`hover`）作为提示，推到顶边或稍作停留再展开。
+/// 指针靠近（`peekZone`）时只从顶边探出一条细边（`hover`）作为提示；
+/// 推到顶边，或在菜单栏这一条（`openZone`）稍作停留，才展开。
+/// 收起 / 探出都让圆角胶囊从顶边外滑入滑出（`retracted`），全程保留圆角。
 struct DockBarLayout: Equatable {
     /// 无刘海时作为停靠锚点的名义尺寸，也是有刘海时的下限。
     static let fallbackNotchWidth: CGFloat = 200
@@ -43,6 +45,11 @@ struct DockBarLayout: Equatable {
     static let peekWidthRatio: CGFloat = 0.6
     /// 菜单栏自动隐藏时 visibleFrame 不再扣除菜单栏，感应区退化为顶边这一条。
     static let minimumRevealDepth: CGFloat = 8
+    /// 探头区比打开区更宽、更深：靠近就有提示，但只在菜单栏内停留才会打开，
+    /// 避免指针经过窗口标题栏时误开。
+    static let peekMargin: CGFloat = 40
+    static let peekExtraDepth: CGFloat = 16
+    static let openMargin: CGFloat = 24
     /// 指针被屏幕顶边挡住的那几行：在这里视为明确想打开，无需停留。
     static let edgeDepth: CGFloat = 3
 
@@ -50,8 +57,10 @@ struct DockBarLayout: Equatable {
     /// 停靠锚点与有刘海时的休息态胶囊。
     let rest: NSRect
     let hover: NSRect
-    /// 无刘海时的悬停感应区：岛体宽度、菜单栏高度。
-    let revealZone: NSRect
+    /// 无刘海时出现探头提示的范围。
+    let peekZone: NSRect
+    /// 无刘海时停留即展开的范围：菜单栏这一条。
+    let openZone: NSRect
 
     init(notch: NotchMetrics, canvasWidth: CGFloat, canvasTop: CGFloat, menuBarHeight: CGFloat = 0) {
         self.notch = notch
@@ -69,7 +78,16 @@ struct DockBarLayout: Equatable {
         }
         let depth = max(menuBarHeight, Self.minimumRevealDepth)
         // The pointer can report the top row at canvasTop itself; include it.
-        revealZone = NSRect(x: rest.minX - 14, y: canvasTop - depth, width: rest.width + 28, height: depth + 1)
+        openZone = NSRect(x: rest.minX - Self.openMargin, y: canvasTop - depth,
+                          width: rest.width + Self.openMargin * 2, height: depth + 1)
+        let peekDepth = depth + Self.peekExtraDepth
+        peekZone = NSRect(x: rest.minX - Self.peekMargin, y: canvasTop - peekDepth,
+                          width: rest.width + Self.peekMargin * 2, height: peekDepth + 1)
+    }
+
+    /// 同一形状移到屏幕顶边之外，作为无刘海时收起的终点和展开的起点。
+    func retracted(_ shape: NSRect) -> NSRect {
+        NSRect(x: shape.minX, y: rest.maxY + 1, width: shape.width, height: shape.height)
     }
 
     /// 休息态实际显示的轮廓：有刘海时包住刘海；无刘海时收成贴住屏幕顶边的零高度形状，
@@ -80,6 +98,6 @@ struct DockBarLayout: Equatable {
 
     /// 点（画布坐标）是否已贴到屏幕顶边。
     func isAtTopEdge(_ point: NSPoint) -> Bool {
-        revealZone.contains(point) && point.y >= rest.maxY - Self.edgeDepth
+        openZone.contains(point) && point.y >= rest.maxY - Self.edgeDepth
     }
 }

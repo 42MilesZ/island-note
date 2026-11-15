@@ -127,7 +127,7 @@ final class IslandNoteController: NSObject {
 
     // 几何
     private var screenFrame = NSRect.zero
-    private var dockLayout: DockBarLayout!
+    private(set) var dockLayout: DockBarLayout!
     var hasNotch: Bool { dockLayout.notch.hasNotch }
     private var eW: CGFloat = 460
     private var panelH: CGFloat = 240
@@ -273,7 +273,7 @@ final class IslandNoteController: NSObject {
         if let size = notch.size {
             dockLogger.info("Dock on notched screen \(screen.localizedName, privacy: .public): notch=\(size.width, privacy: .public)x\(size.height, privacy: .public)pt scale=\(screen.backingScaleFactor, privacy: .public) island=\(rest.width, privacy: .public)x\(rest.height, privacy: .public)pt")
         } else {
-            dockLogger.info("Dock on screen without notch \(screen.localizedName, privacy: .public): resting island hidden, reveal zone=\(self.dockLayout.revealZone.width, privacy: .public)x\(self.dockLayout.revealZone.height, privacy: .public)pt")
+            dockLogger.info("Dock on screen without notch \(screen.localizedName, privacy: .public): resting island hidden, peek zone=\(self.dockLayout.peekZone.width, privacy: .public)x\(self.dockLayout.peekZone.height, privacy: .public)pt open zone=\(self.dockLayout.openZone.width, privacy: .public)x\(self.dockLayout.openZone.height, privacy: .public)pt")
         }
     }
 
@@ -288,10 +288,20 @@ final class IslandNoteController: NSObject {
         case .expanded: return dragInteraction.path(for: expandedRect)
         case .rest: return restPath()
         case .hover:
-            guard hasNotch else { return notchPath(hoverRect, topR: 0, botR: DockBarLayout.peekHeight / 2) }
+            guard hasNotch else { return peekPath(hoverRect) }
             let (top, bottom) = radii(for: m)
             return notchPath(hoverRect, topR: top, botR: bottom)
         }
+    }
+
+    private func peekPath(_ r: NSRect) -> CGPath {
+        notchPath(r, topR: 0, botR: DockBarLayout.peekHeight / 2)
+    }
+
+    /// 无刘海时某形态在顶边之外的位置：收起滑出、展开滑入都以它为端点，圆角始终可见。
+    private func retractedPath(for m: Mode) -> CGPath {
+        m == .hover ? peekPath(dockLayout.retracted(hoverRect))
+            : notchPath(dockLayout.retracted(restRect), topR: compactTopR, botR: compactBotR)
     }
 
     /// 屏幕坐标转停靠画布坐标；停靠位置由屏幕决定，不受面板悬浮位置影响。
@@ -307,7 +317,7 @@ final class IslandNoteController: NSObject {
     /// 无刘海屏幕的悬停：进入感应区探出细边，贴顶边立即展开，否则停留片刻后展开。
     private func handleRevealHover(at screenPoint: NSPoint) {
         let point = dockCanvasPoint(screenPoint)
-        guard dockLayout.revealZone.contains(point) else {
+        guard dockLayout.peekZone.contains(point) else {
             revealSuppressed = false
             if mode == .hover { goTo(.rest) }
             return
@@ -319,11 +329,12 @@ final class IslandNoteController: NSObject {
             return
         }
         if mode == .rest { goTo(.hover) }
+        guard dockLayout.openZone.contains(point) else { cancelReveal(); return }
         guard pendingReveal == nil else { return }
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.pendingReveal = nil
-            // Leaving the zone returns to rest and cancels this item, so hover implies presence.
+            // Leaving the open zone cancels this item, so it only fires while the pointer stays there.
             guard self.mode == .hover, !self.revealSuppressed else { return }
             self.dockLogger.debug("Reveal: pointer rested in the zone")
             self.expand()
@@ -1033,7 +1044,7 @@ final class IslandNoteController: NSObject {
         }
     }
 
-    private func handleClick(_ e: NSEvent?) {
+    func handleClick(_ e: NSEvent?) {
         guard !menuOpenHoverGate.isActive else { return }
         guard !dragInteraction.preventsCollapse else { return }
         guard mode == .expanded || !isAuxiliaryWindowOpen else { return }
@@ -1045,7 +1056,7 @@ final class IslandNoteController: NSObject {
             }
         case .rest where !hasNotch, .hover where !hasNotch:
             // The click belongs to the menu bar beneath the invisible island.
-            if dockLayout.revealZone.contains(dockCanvasPoint(loc)) {
+            if dockLayout.peekZone.contains(dockCanvasPoint(loc)) {
                 revealSuppressed = true
                 cancelReveal()
                 if mode == .hover { goTo(.rest) }
@@ -1427,6 +1438,7 @@ final class IslandNoteController: NSObject {
     /// 只动画遮罩形状（顶边恒定）。expanded 用弹簧回弹。
     private func goTo(_ m: Mode) {
         guard m != mode else { return }
+        let previous = mode
         stopViewportAnimation()
         edgeResize = nil
         resizeHandles.isEnabled = false
@@ -1461,11 +1473,18 @@ final class IslandNoteController: NSObject {
         }
 
         let path = shapePath(for: m)
-        let from = maskLayer.presentation()?.path ?? maskLayer.path
+        var from = maskLayer.presentation()?.path ?? maskLayer.path
+        var to = path
+        if !hasNotch {
+            // The hidden rest shape is flat. Animate against the rounded shape just
+            // beyond the top edge instead; the model path takes over off screen.
+            if m == .rest { to = retractedPath(for: previous) }
+            if previous == .rest, maskLayer.animation(forKey: "path") == nil { from = retractedPath(for: m) }
+        }
 
         let anim = shapeSpring(for: m)
         anim.fromValue = from
-        anim.toValue = path
+        anim.toValue = to
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         maskLayer.path = path
