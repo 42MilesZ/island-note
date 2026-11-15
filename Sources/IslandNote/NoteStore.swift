@@ -7,6 +7,7 @@ final class NoteStore {
     private enum SaveError: LocalizedError {
         case changedOutsideApp
         case documentNotLoaded
+        case documentMissing(String)
 
         var errorDescription: String? {
             switch self {
@@ -14,6 +15,8 @@ final class NoteStore {
                 return L10n.tr("Island Note.md changed in another app. The Vault file was not overwritten. Copy your unsaved text before restarting, then resolve the two versions.")
             case .documentNotLoaded:
                 return L10n.tr("The Vault document has not loaded. Saving is blocked to protect its existing contents.")
+            case .documentMissing(let path):
+                return L10n.format("%@ was moved, renamed or deleted. Open Settings and choose Open Existing File… to select it again.", path)
             }
         }
     }
@@ -26,6 +29,9 @@ final class NoteStore {
     private var configurationError: Error?
     private var usesManagedFile: Bool
     private var scopedURL: URL?
+    /// Bookmark of the open document. Bookmarks resolve by file identity, so a
+    /// note moved or renamed in Finder or Obsidian is followed to its new path.
+    private var bookmarkData: Data?
     private var legacyDocumentPath: String?
     private let debounceInterval: TimeInterval = 0.18
     private(set) var lastErrorMessage: String?
@@ -53,15 +59,28 @@ final class NoteStore {
                 guard config.notePath.hasPrefix("/") else { throw CocoaError(.fileReadInvalidFileName) }
                 if let bookmark = config.bookmark {
                     var stale = false
-                    let resolved = try URL(resolvingBookmarkData: bookmark, options: [.withSecurityScope],
+                    let resolved = try URL(resolvingBookmarkData: bookmark, options: Self.bookmarkResolutionOptions,
                                            relativeTo: nil, bookmarkDataIsStale: &stale)
                     self.fileURL = resolved
-                    if resolved.startAccessingSecurityScopedResource() { scopedURL = resolved }
-                    if stale {
-                        let refreshed = try resolved.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+                    if Self.usesSecurityScope, resolved.startAccessingSecurityScopedResource() { scopedURL = resolved }
+                    bookmarkData = bookmark
+                    if stale || resolved.path != config.notePath {
+                        let refreshed = try Self.makeBookmark(for: resolved)
+                        bookmarkData = refreshed
                         try Self.writeConfiguration(NoteConfiguration(notePath: resolved.path, bookmark: refreshed), directory: directory)
                     }
-                } else { self.fileURL = URL(fileURLWithPath: config.notePath) }
+                } else {
+                    let url = URL(fileURLWithPath: config.notePath)
+                    guard FileManager.default.fileExists(atPath: url.path) else {
+                        throw SaveError.documentMissing(config.notePath)
+                    }
+                    self.fileURL = url
+                    // Upgrade path-only settings so later moves can be followed.
+                    if let bookmark = try? Self.makeBookmark(for: url) {
+                        bookmarkData = bookmark
+                        try? Self.writeConfiguration(NoteConfiguration(notePath: url.path, bookmark: bookmark), directory: directory)
+                    }
+                }
                 usesManagedFile = false
             } else {
                 self.fileURL = managed
@@ -87,6 +106,50 @@ final class NoteStore {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
+    #if ISLAND_APP_STORE || ISLAND_TESTFLIGHT
+    private static let usesSecurityScope = true
+    private static let bookmarkResolutionOptions: URL.BookmarkResolutionOptions = [.withSecurityScope, .withoutUI]
+    private static func makeBookmark(for url: URL) throws -> Data {
+        try url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+    }
+    #else
+    private static let usesSecurityScope = false
+    private static let bookmarkResolutionOptions: URL.BookmarkResolutionOptions = [.withoutUI, .withoutMounting]
+    private static func makeBookmark(for url: URL) throws -> Data {
+        try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+    }
+    #endif
+
+    /// Follow the open document when it was moved or renamed while Island Note runs.
+    /// Returns true when the document now lives at a new path. Never creates,
+    /// moves or rewrites the Markdown file itself.
+    @discardableResult
+    func relocateIfMoved() -> Bool {
+        guard !usesManagedFile, configurationError == nil,
+              !FileManager.default.fileExists(atPath: fileURL.path), let bookmarkData else { return false }
+        var stale = false
+        guard let resolved = try? URL(resolvingBookmarkData: bookmarkData, options: Self.bookmarkResolutionOptions,
+                                      relativeTo: nil, bookmarkDataIsStale: &stale),
+              resolved.standardizedFileURL != fileURL.standardizedFileURL,
+              FileManager.default.fileExists(atPath: resolved.path) else { return false }
+        let previousState = syncStateURL(for: fileURL).deletingLastPathComponent()
+        if Self.usesSecurityScope {
+            scopedURL?.stopAccessingSecurityScopedResource()
+            scopedURL = resolved.startAccessingSecurityScopedResource() ? resolved : nil
+        }
+        fileURL = resolved
+        let refreshed = (try? Self.makeBookmark(for: resolved)) ?? bookmarkData
+        self.bookmarkData = refreshed
+        try? Self.writeConfiguration(NoteConfiguration(notePath: resolved.path, bookmark: refreshed), directory: configurationDirectory)
+        // Per-document sync state is keyed by path; carry it to the new location.
+        let newState = syncStateURL(for: resolved).deletingLastPathComponent()
+        if FileManager.default.fileExists(atPath: previousState.path), !FileManager.default.fileExists(atPath: newState.path) {
+            try? FileManager.default.moveItem(at: previousState, to: newState)
+        }
+        NSLog("IslandNote: followed moved note to %@", resolved.path)
+        return true
+    }
+
     /// Validate and save the selection before releasing the previous document's access.
     /// An open failure keeps the current document and its pending text intact.
     func openExisting(_ url: URL) throws -> String {
@@ -96,15 +159,16 @@ final class NoteStore {
         defer { if accessed && !committed { url.stopAccessingSecurityScopedResource() } }
         let text = try String(contentsOf: url, encoding: .utf8)
         #if ISLAND_APP_STORE || ISLAND_TESTFLIGHT
-        let bookmark = try url.bookmarkData(options: [.withSecurityScope], includingResourceValuesForKeys: nil, relativeTo: nil)
+        let bookmark: Data? = try Self.makeBookmark(for: url)
         #else
-        let bookmark: Data? = nil
+        let bookmark: Data? = try? Self.makeBookmark(for: url)
         #endif
         try Self.writeConfiguration(NoteConfiguration(notePath: url.path, bookmark: bookmark), directory: configurationDirectory)
         scopedURL?.stopAccessingSecurityScopedResource()
         scopedURL = accessed ? url : nil
         committed = true
         fileURL = url
+        bookmarkData = bookmark
         usesManagedFile = false
         configurationError = nil
         lastLoadedContent = text
@@ -187,6 +251,7 @@ final class NoteStore {
 
     var path: String { fileURL.path }
     var modifiedAt: Date? {
+        relocateIfMoved()
         var url = fileURL
         url.removeCachedResourceValue(forKey: .contentModificationDateKey)
         return try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
@@ -194,6 +259,7 @@ final class NoteStore {
 
     func load() throws -> String {
         if let configurationError { throw configurationError }
+        relocateIfMoved()
         if usesManagedFile, !FileManager.default.fileExists(atPath: fileURL.path) {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             do { try Data().write(to: fileURL, options: .withoutOverwriting) }
@@ -208,6 +274,7 @@ final class NoteStore {
     /// Pick up edits made in Obsidian when there is no unsaved Island Note text.
     func refreshIfClean() throws -> String? {
         guard pending == nil else { return nil }
+        relocateIfMoved()
         let diskText = try String(contentsOf: fileURL, encoding: .utf8)
         let changed = diskText != lastLoadedContent
         lastLoadedContent = diskText
@@ -271,6 +338,9 @@ final class NoteStore {
     #endif
 
     private func coordinatedWrite(_ text: String, expected: String) throws {
+        relocateIfMoved()
+        // Never recreate a moved or deleted note at its old path.
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { throw SaveError.documentMissing(fileURL.path) }
         var coordinationError: NSError?
         var writeError: Error?
         NSFileCoordinator().coordinate(writingItemAt: fileURL, options: .forReplacing,
