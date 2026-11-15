@@ -348,3 +348,5 @@
 "Setext headings and horizontal rules" = "下划线式标题和水平分隔线";
 "Italic formatting" = "斜体";
 "Use consistent 2- or 4-space list indentation before syncing. Your local text is still saved." = "请使用一致的每层 2 或 4 个空格缩进后再同步，本机原文仍会保存。";
+
+"%@ was moved, renamed or deleted. Open Settings and choose Open Existing File… to select it again." = "%@ 已被移动、重命名或删除。请打开设置，选择“打开已有文件…”重新选中它。";
