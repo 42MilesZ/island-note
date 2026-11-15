@@ -86,6 +86,17 @@ final class DockGeometryTests: XCTestCase {
         }
     }
 
+    func testScreenAboveIsDetectedOnlyWhenItOverlapsTheIsland() {
+        let main = NSRect(x: 0, y: 0, width: 1920, height: 1080)
+        let span: ClosedRange<CGFloat> = 820...1100
+        XCTAssertFalse(DockBarLayout.hasScreen(above: main, among: [main], spanning: span))
+        XCTAssertTrue(DockBarLayout.hasScreen(above: main, among: [main, NSRect(x: 400, y: 1080, width: 2560, height: 1440)], spanning: span))
+        XCTAssertFalse(DockBarLayout.hasScreen(above: main, among: [main, NSRect(x: 1920, y: 0, width: 1512, height: 982)], spanning: span),
+                       "A display beside this one leaves the top edge intact")
+        XCTAssertFalse(DockBarLayout.hasScreen(above: main, among: [main, NSRect(x: -1600, y: 1080, width: 1600, height: 900)], spanning: span),
+                       "A display above but away from the centre does not matter")
+    }
+
     private func metrics(width: CGFloat, height: CGFloat) -> NotchMetrics {
         let side = (1512 - width) / 2
         return NotchMetrics(screenWidth: 1512, safeAreaTop: height,

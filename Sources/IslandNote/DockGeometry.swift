@@ -99,6 +99,15 @@ struct DockBarLayout: Equatable {
         notch.hasNotch ? rest : NSRect(x: rest.minX, y: rest.maxY, width: rest.width, height: 0)
     }
 
+    /// 屏幕正上方是否摆着另一块显示器（与岛体所在的水平区间有重叠）。
+    /// 这时顶边挡不住指针，"推到顶边"不能当作打开意图，收起动画也不能画到顶边之外。
+    static func hasScreen(above frame: NSRect, among others: [NSRect], spanning span: ClosedRange<CGFloat>) -> Bool {
+        others.contains { other in
+            other != frame && abs(other.minY - frame.maxY) < 1
+                && other.maxX > span.lowerBound && other.minX < span.upperBound
+        }
+    }
+
     /// 点（画布坐标）是否已贴到屏幕顶边。
     func isAtTopEdge(_ point: NSPoint) -> Bool {
         openZone.contains(point) && point.y >= rest.maxY - Self.edgeDepth
