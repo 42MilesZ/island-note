@@ -40,8 +40,11 @@ struct DockBarLayout: Equatable {
     /// 无刘海时作为停靠锚点的名义尺寸，也是有刘海时的下限。
     static let fallbackNotchWidth: CGFloat = 200
     static let minimumHeight: CGFloat = 33
-    /// 无刘海时的探头细边。
-    static let peekHeight: CGFloat = 6
+    /// 无刘海时的探头细边：岛体（高 33、顶部张角 10、底部圆角 20）等比缩小，
+    /// 保留顶部向外张开的过渡和饱满的底角，与展开后的轮廓同一造型语言。
+    static let peekHeight: CGFloat = 10
+    static let peekTopRadius: CGFloat = 3
+    static let peekBottomRadius: CGFloat = 6
     static let peekWidthRatio: CGFloat = 0.6
     /// 菜单栏自动隐藏时 visibleFrame 不再扣除菜单栏，感应区退化为顶边这一条。
     static let minimumRevealDepth: CGFloat = 8

@@ -289,7 +289,7 @@ final class IslandNoteController: NSObject {
     }
 
     private func peekPath(_ r: NSRect) -> CGPath {
-        notchPath(r, topR: 0, botR: DockBarLayout.peekHeight / 2)
+        notchPath(r, topR: DockBarLayout.peekTopRadius, botR: DockBarLayout.peekBottomRadius)
     }
 
     /// 无刘海时某形态在顶边之外的位置：收起滑出、展开滑入都以它为端点，圆角始终可见。

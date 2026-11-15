@@ -57,6 +57,9 @@ final class DockGeometryTests: XCTestCase {
         XCTAssertEqual(layout.hover.maxY, 900)
         XCTAssertEqual(layout.hover.midX, layout.rest.midX)
         XCTAssertLessThan(layout.hover.width, layout.rest.width)
+        // Same proportions as the resting capsule: 10 / 33 at the top, 20 / 33 at the bottom.
+        XCTAssertEqual(DockBarLayout.peekTopRadius / DockBarLayout.peekHeight, 10 / 33, accuracy: 0.01)
+        XCTAssertEqual(DockBarLayout.peekBottomRadius / DockBarLayout.peekHeight, 20 / 33, accuracy: 0.01)
 
         XCTAssertEqual(layout.openZone.minY, 876, "Resting opens only within the menu bar")
         XCTAssertEqual(layout.peekZone.minY, 876 - DockBarLayout.peekExtraDepth, "The hint starts a little earlier")
