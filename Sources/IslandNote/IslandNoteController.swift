@@ -127,16 +127,16 @@ final class IslandNoteController: NSObject {
 
     // 几何
     private var screenFrame = NSRect.zero
-    private var notchW: CGFloat = 200
-    private var notchH: CGFloat = 32
+    private var dockLayout: DockBarLayout!
+    var hasNotch: Bool { dockLayout.notch.hasNotch }
     private var eW: CGFloat = 460
     private var panelH: CGFloat = 240
     private var gutter: CGFloat = 16
     private var eH: CGFloat = 256
     private var canvasTop: CGFloat { eH - gutter }
 
-    private var restRect = NSRect.zero
-    private var hoverRect = NSRect.zero
+    private var restRect: NSRect { dockLayout.rest }
+    private var hoverRect: NSRect { dockLayout.hover }
     private var expandedRect = NSRect.zero
     private var dockedSize: NSSize = PanelSize.standard.dimensions
     private struct PinchSession {
@@ -151,6 +151,7 @@ final class IslandNoteController: NSObject {
     private var isPinching: Bool { pinchSession != nil }
     private var pendingDockedSize: NSSize?
     private let diagnostics: InteractionDiagnostics
+    private let measureNotch: @MainActor (NSScreen) -> NotchMetrics
     private var resizeTimer: Timer?
     private var resizeMotion: PanelResizeMotion?
     private var resizeTick: TimeInterval = 0
@@ -166,6 +167,7 @@ final class IslandNoteController: NSObject {
     }
     private var edgeResize: EdgeResize?
     private let logger = Logger(subsystem: "local.projects.island-note", category: "PanelResize")
+    private let dockLogger = Logger(subsystem: "local.projects.island-note", category: "DockGeometry")
 
     private let compactTopR: CGFloat = 10
     private let compactBotR: CGFloat = 20
@@ -183,11 +185,14 @@ final class IslandNoteController: NSObject {
     var isMenuOpening: Bool { menuOpenTimer != nil }
     private var monitors: [Any] = []
 
-    init(store: NoteStore, enableSync: Bool = true, diagnostics: InteractionDiagnostics? = nil, preferences: AppPreferences? = nil) {
+    /// `notchMetrics` 仅供测试在任意硬件上模拟有 / 无刘海的屏幕。
+    init(store: NoteStore, enableSync: Bool = true, diagnostics: InteractionDiagnostics? = nil, preferences: AppPreferences? = nil,
+         notchMetrics: (@MainActor (NSScreen) -> NotchMetrics)? = nil) {
         self.store = store
         self.preferences = preferences ?? (enableSync ? .shared : AppPreferences(defaults: nil))
         self.canEnableSync = enableSync
         self.diagnostics = diagnostics ?? (enableSync ? .shared : InteractionDiagnostics(defaults: nil, enabled: false))
+        self.measureNotch = notchMetrics ?? { NotchMetrics(screen: $0) }
         super.init()
         installMainMenu()
         setup()
@@ -248,9 +253,46 @@ final class IslandNoteController: NSObject {
     // MARK: - 几何辅助
 
     private func notchScreen() -> NSScreen {
-        NSScreen.screens.first(where: { $0.safeAreaInsets.top > 0 })
+        NSScreen.screens.first(where: { measureNotch($0).hasNotch })
             ?? NSScreen.main
             ?? NSScreen.screens[0]
+    }
+
+    /// 按目标屏幕的刘海重新计算停靠几何，并记录实测值以便排查不同机型 / 缩放下的差异。
+    private func layoutDock(on screen: NSScreen) {
+        screenFrame = screen.frame
+        let notch = measureNotch(screen)
+        dockLayout = DockBarLayout(notch: notch, canvasWidth: eW, canvasTop: canvasTop)
+        let rest = dockLayout.rest
+        if let size = notch.size {
+            dockLogger.info("Dock on notched screen \(screen.localizedName, privacy: .public): notch=\(size.width, privacy: .public)x\(size.height, privacy: .public)pt scale=\(screen.backingScaleFactor, privacy: .public) island=\(rest.width, privacy: .public)x\(rest.height, privacy: .public)pt")
+        } else {
+            dockLogger.info("Dock on screen without notch \(screen.localizedName, privacy: .public): resting island hidden, open from the menu bar")
+        }
+    }
+
+    /// 休息态轮廓。无刘海时收成零高度，所有圆角归零，避免退化路径在顶边画出残影。
+    private func restPath() -> CGPath {
+        hasNotch ? notchPath(restRect, topR: compactTopR, botR: compactBotR)
+            : notchPath(dockLayout.restVisible, topR: 0, botR: 0)
+    }
+
+    private func shapePath(for m: Mode) -> CGPath {
+        switch m {
+        case .expanded: return dragInteraction.path(for: expandedRect)
+        case .rest: return restPath()
+        case .hover:
+            let (top, bottom) = radii(for: m)
+            return notchPath(hoverRect, topR: top, botR: bottom)
+        }
+    }
+
+    /// 无刘海时收起的岛体不可见，也不应拦截菜单栏中央的点击。
+    private func updateRestInteractivity() {
+        let interactive = hasNotch || mode == .expanded
+        panel.ignoresMouseEvents = !interactive
+        island.setAccessibilityElement(hasNotch && mode != .expanded)
+        dragInteraction.showsIdleAnchor = hasNotch
     }
 
     private func screenRect(_ r: NSRect) -> NSRect {
@@ -288,15 +330,6 @@ final class IslandNoteController: NSObject {
     private func setup() {
         let screen = notchScreen()
         let sf = screen.frame
-        screenFrame = sf
-        notchH = max(screen.safeAreaInsets.top, 32)
-        if let l = screen.auxiliaryTopLeftArea, let r = screen.auxiliaryTopRightArea {
-            let w = sf.width - l.width - r.width
-            if w > 40 { notchW = w }
-        }
-
-        // 灵动岛比例取中：略扁略宽，不过分
-        let barH: CGFloat = 33
         panelH = PanelSize.standard.dimensions.height
         // Space for the lifted shadow on all sides, including above a floating panel.
         gutter = 64
@@ -308,14 +341,7 @@ final class IslandNoteController: NSObject {
 
         // 可见形状顶边 = canvasTop（屏幕最顶），上方透明区域留给悬浮阴影。
         expandedRect = expandedFrame(for: .standard)
-        let restW = max(notchW * 1.06, 210) - 11
-        restRect = NSRect(x: (eW - restW) / 2, y: canvasTop - barH, width: restW, height: barH)
-        hoverRect = NSRect(
-            x: (eW - restW - 14) / 2,
-            y: canvasTop - barH - 4,
-            width: restW + 14,
-            height: barH + 4
-        )
+        layoutDock(on: screen)
 
         // The editor explicitly activates on expansion. Construct an activating
         // panel so native gesture delivery follows the same focus lifecycle.
@@ -355,7 +381,7 @@ final class IslandNoteController: NSObject {
         island.layer?.backgroundColor = NSColor.black.cgColor
         maskLayer = CAShapeLayer()
         maskLayer.frame = island.bounds
-        maskLayer.path = notchPath(restRect, topR: compactTopR, botR: compactBotR)
+        maskLayer.path = restPath()
         island.layer?.mask = maskLayer
         island.hitRect = restRect
         island.setAccessibilityElement(true)
@@ -421,6 +447,7 @@ final class IslandNoteController: NSObject {
                 guard let self else { return .zero }
                 return self.viewportFrame(size: self.targetViewportSize ?? self.expandedRect.size)
             }, onFloatingChange: { [weak self] floating in self?.changeFloatingLayout(floating) })
+        updateRestInteractivity()
         editor.dragHandle.onBegin = { [weak self] point in
             guard let self, self.mode == .expanded else { return }
             self.pendingCollapse?.cancel()
@@ -484,17 +511,8 @@ final class IslandNoteController: NSObject {
 
     private func updateDockScreen() {
         let screen = notchScreen()
-        screenFrame = screen.frame
-        notchW = 200
-        if let l = screen.auxiliaryTopLeftArea, let r = screen.auxiliaryTopRightArea {
-            let width = screenFrame.width - l.width - r.width
-            if width > 40 { notchW = width }
-        }
-        let width = max(notchW * 1.06, 210) - 11
-        restRect = NSRect(x: (eW - width) / 2, y: canvasTop - 33, width: width, height: 33)
-        hoverRect = restRect.insetBy(dx: -7, dy: 0)
-        hoverRect.origin.y -= 4
-        hoverRect.size.height += 4
+        layoutDock(on: screen)
+        if !hasNotch, mode == .hover { mode = .rest }
         let origin = NSPoint(x: screenFrame.midX - eW / 2, y: screenFrame.maxY - canvasTop)
         dragInteraction.updateDock(anchorRect: restRect.offsetBy(dx: origin.x, dy: origin.y), origin: origin)
         if dragInteraction.isFloating, !dragInteraction.isInteracting {
@@ -514,10 +532,9 @@ final class IslandNoteController: NSObject {
         if !dragInteraction.preventsCollapse {
             hitGate.hitRect = rect(for: mode)
             island.hitRect = rect(for: mode)
-            let (top, bottom) = radii(for: mode)
-            maskLayer.path = mode == .expanded ? dragInteraction.path(for: expandedRect)
-                : notchPath(rect(for: mode), topR: top, botR: bottom)
+            maskLayer.path = shapePath(for: mode)
         }
+        updateRestInteractivity()
     }
 
     deinit {
@@ -956,8 +973,8 @@ final class IslandNoteController: NSObject {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
             }
         case .rest:
-            // 悬浮岛体区域 → 立刻弹出
-            if screenRect(restRect).insetBy(dx: -14, dy: -10).contains(loc) {
+            // 悬浮岛体区域 → 立刻弹出；无刘海时休息态不可见，只从菜单栏打开
+            if hasNotch, screenRect(restRect).insetBy(dx: -14, dy: -10).contains(loc) {
                 expand()
             }
         case .hover:
@@ -979,16 +996,17 @@ final class IslandNoteController: NSObject {
                 collapse(automatically: true)
             }
         case .rest, .hover:
-            if screenRect(rect(for: mode)).insetBy(dx: -8, dy: -8).contains(loc) {
+            if hasNotch, screenRect(rect(for: mode)).insetBy(dx: -8, dy: -8).contains(loc) {
                 expand()
             }
         }
     }
 
     private func handleRightClick(_ e: NSEvent?) {
+        guard hasNotch || mode == .expanded else { return }
         let loc = screenPoint(for: e)
         let inIsland = screenRect(rect(for: mode)).insetBy(dx: -12, dy: -12).contains(loc)
-            || screenRect(restRect).insetBy(dx: -12, dy: -12).contains(loc)
+            || (hasNotch && screenRect(restRect).insetBy(dx: -12, dy: -12).contains(loc))
         guard inIsland else { return }
 
         let menu = NSMenu()
@@ -1374,7 +1392,7 @@ final class IslandNoteController: NSObject {
 
         // 只在展开态显示编辑器，收起时岛体是纯黑胶囊
         let showEditor = (m == .expanded)
-        island.setAccessibilityElement(!showEditor)
+        updateRestInteractivity()
         island.setAccessibilityRole(showEditor ? .group : .button)
         if showEditor {
             editor.frame = expandedRect
@@ -1386,9 +1404,7 @@ final class IslandNoteController: NSObject {
             editor.isHidden = true
         }
 
-        let (tR, bR) = radii(for: m)
-        let path = m == .expanded ? dragInteraction.path(for: expandedRect)
-            : notchPath(rect(for: m), topR: tR, botR: bR)
+        let path = shapePath(for: m)
         let from = maskLayer.presentation()?.path ?? maskLayer.path
 
         let anim = shapeSpring(for: m)

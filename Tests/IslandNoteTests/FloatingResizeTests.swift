@@ -12,8 +12,13 @@ final class FloatingResizeTests: XCTestCase {
     private func settle(_ interval: TimeInterval = 0.8) {
         RunLoop.main.run(until: Date().addingTimeInterval(interval))
     }
+    /// These interactions describe the notched-screen island, independent of the test machine.
+    nonisolated static let simulatedNotch = NotchMetrics(screenWidth: 1512, safeAreaTop: 32,
+        topLeftArea: NSRect(x: 0, y: 950, width: 663, height: 32),
+        topRightArea: NSRect(x: 848, y: 950, width: 664, height: 32))
+
     private func withPanel(diagnostics: InteractionDiagnostics? = nil, openingDelay: TimeInterval = 1.1,
-                           content: String? = nil,
+                           content: String? = nil, notch: NotchMetrics = simulatedNotch,
                            _ body: (IslandNoteController, IslandPanel, NoteEditorView, NSTextView) throws -> Void) throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("island-resize-" + UUID().uuidString)
@@ -25,7 +30,8 @@ final class FloatingResizeTests: XCTestCase {
         let existing = Set(NSApp.windows.map(ObjectIdentifier.init))
         let previousMenu = NSApp.mainMenu
         defer { NSApp.mainMenu = previousMenu }
-        let controller = IslandNoteController(store: NoteStore(fileURL: note), enableSync: false, diagnostics: diagnostics)
+        let controller = IslandNoteController(store: NoteStore(fileURL: note), enableSync: false, diagnostics: diagnostics,
+                                              notchMetrics: { _ in notch })
         let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? IslandPanel }.first { !existing.contains(ObjectIdentifier($0)) })
         defer { panel.close() }
         controller.expand()
@@ -608,6 +614,31 @@ final class FloatingResizeTests: XCTestCase {
             XCTAssertEqual(controller.mode, .rest, "Closing confirmation must not reopen the note")
             NSApp.sendEvent(hover); settle(0.8)
             XCTAssertEqual(controller.mode, .expanded)
+        }
+    }
+
+    func testScreenWithoutNotchHidesRestingIslandAndOpensFromMenu() throws {
+        let none = NotchMetrics(screenWidth: 1920, safeAreaTop: 0, topLeftArea: nil, topRightArea: nil)
+        try withPanel(notch: none) { controller, panel, editor, _ in
+            XCTAssertFalse(controller.hasNotch)
+            XCTAssertFalse(panel.ignoresMouseEvents, "An open note stays interactive")
+            let initial = editor.frame
+            controller.collapse(); settle(1.1)
+            XCTAssertEqual(controller.mode, .rest)
+            XCTAssertTrue(panel.ignoresMouseEvents, "The hidden island must not swallow menu bar clicks")
+            let mask = try XCTUnwrap(panel.contentView?.subviews.first?.layer?.mask as? CAShapeLayer)
+            XCTAssertEqual(try XCTUnwrap(mask.path).boundingBoxOfPath.height, 0, accuracy: 0.001)
+
+            let hover = try XCTUnwrap(NSEvent.mouseEvent(with: .mouseMoved,
+                location: NSPoint(x: initial.midX, y: initial.maxY - 15), modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 0, pressure: 0))
+            controller.handleHover(hover); settle(0.2)
+            XCTAssertEqual(controller.mode, .rest, "Hovering the empty menu bar centre does not open the note")
+
+            controller.openFromStatusMenu(); settle(1.1)
+            XCTAssertEqual(controller.mode, .expanded)
+            XCTAssertFalse(panel.ignoresMouseEvents)
         }
     }
 
