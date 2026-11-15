@@ -12,8 +12,13 @@ final class FloatingResizeTests: XCTestCase {
     private func settle(_ interval: TimeInterval = 0.8) {
         RunLoop.main.run(until: Date().addingTimeInterval(interval))
     }
+    /// These interactions describe the notched-screen island, independent of the test machine.
+    nonisolated static let simulatedNotch = NotchMetrics(screenWidth: 1512, safeAreaTop: 32,
+        topLeftArea: NSRect(x: 0, y: 950, width: 663, height: 32),
+        topRightArea: NSRect(x: 848, y: 950, width: 664, height: 32))
+
     private func withPanel(diagnostics: InteractionDiagnostics? = nil, openingDelay: TimeInterval = 1.1,
-                           content: String? = nil,
+                           content: String? = nil, notch: NotchMetrics = simulatedNotch,
                            _ body: (IslandNoteController, IslandPanel, NoteEditorView, NSTextView) throws -> Void) throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("island-resize-" + UUID().uuidString)
@@ -25,7 +30,8 @@ final class FloatingResizeTests: XCTestCase {
         let existing = Set(NSApp.windows.map(ObjectIdentifier.init))
         let previousMenu = NSApp.mainMenu
         defer { NSApp.mainMenu = previousMenu }
-        let controller = IslandNoteController(store: NoteStore(fileURL: note), diagnostics: diagnostics ?? InteractionDiagnostics(defaults: nil, enabled: false))
+        let controller = IslandNoteController(store: NoteStore(fileURL: note), diagnostics: diagnostics ?? InteractionDiagnostics(defaults: nil, enabled: false),
+                                              notchMetrics: { _ in notch })
         let panel = try XCTUnwrap(NSApp.windows.compactMap { $0 as? IslandPanel }.first { !existing.contains(ObjectIdentifier($0)) })
         defer { panel.close() }
         controller.expand()

@@ -68,6 +68,10 @@ final class PanelDragCoordinator {
     private var preview = false
     private var wantsCollapse = false
     private(set) var isFloating = false
+    /// 停靠锚点在悬浮静置时是否保留。无刘海屏幕上设为 false：锚点只在拖拽和回停途中作为目标出现。
+    var showsIdleAnchor = true {
+        didSet { if showsIdleAnchor != oldValue { renderConnection() } }
+    }
 
     var isInteracting: Bool { drag != nil || flight != nil }
     var isDocking: Bool { flight?.dock == true }
@@ -359,11 +363,24 @@ final class PanelDragCoordinator {
         p.addQuadCurve(to: CGPoint(x: r.maxX, y: r.maxY), control: CGPoint(x: r.maxX - 10, y: r.maxY))
         p.closeSubpath()
         anchor.path = p
+        setAnchorVisible(showsIdleAnchor || drag != nil || flight?.dock == true)
         highlight.path = CGPath(roundedRect: r.insetBy(dx: 25, dy: 8), cornerWidth: 7, cornerHeight: 7, transform: nil)
         highlight.opacity = Float(visible.welcome)
         bridge.path = PanelContour.bridgePath(island: r, body: body,
                                               connection: reducedMotion ? 0 : visible.connection)
         bridge.opacity = 1
+    }
+
+    private func setAnchorVisible(_ visible: Bool) {
+        let target: Float = visible ? 1 : 0
+        guard anchor.opacity != target else { return }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = anchor.presentation()?.opacity ?? anchor.opacity
+        fade.toValue = target
+        fade.duration = reducedMotion ? 0 : 0.2
+        fade.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        anchor.opacity = target
+        anchor.add(fade, forKey: "opacity")
     }
 
     /// Resizing shares the existing outline animation, including the floating shadow.
