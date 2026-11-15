@@ -183,6 +183,8 @@ final class IslandNoteController: NSObject {
     private let revealDwell: TimeInterval = 0.2
     /// 在感应区内点击说明用户在用菜单栏，离开感应区前不再探头。
     private var revealSuppressed = false
+    /// 停靠屏幕上方另有显示器：指针能越过顶边，顶边不再是"推到底"的终点。
+    private var screenAbove = false
     private var finishingCollapse = false
     private var menuOpenHoverGate = MenuOpenHoverGate()
     private var menuOpenTimer: Timer?
@@ -270,10 +272,13 @@ final class IslandNoteController: NSObject {
         dockLayout = DockBarLayout(notch: notch, canvasWidth: eW, canvasTop: canvasTop,
                                    menuBarHeight: screen.frame.maxY - screen.visibleFrame.maxY)
         let rest = dockLayout.rest
+        let originX = screen.frame.midX - eW / 2
+        screenAbove = DockBarLayout.hasScreen(above: screen.frame, among: NSScreen.screens.map(\.frame),
+            spanning: (originX + dockLayout.peekZone.minX)...(originX + dockLayout.peekZone.maxX))
         if let size = notch.size {
             dockLogger.info("Dock on notched screen \(screen.localizedName, privacy: .public): notch=\(size.width, privacy: .public)x\(size.height, privacy: .public)pt scale=\(screen.backingScaleFactor, privacy: .public) island=\(rest.width, privacy: .public)x\(rest.height, privacy: .public)pt")
         } else {
-            dockLogger.info("Dock on screen without notch \(screen.localizedName, privacy: .public): resting island hidden, peek zone=\(self.dockLayout.peekZone.width, privacy: .public)x\(self.dockLayout.peekZone.height, privacy: .public)pt open zone=\(self.dockLayout.openZone.width, privacy: .public)x\(self.dockLayout.openZone.height, privacy: .public)pt")
+            dockLogger.info("Dock on screen without notch \(screen.localizedName, privacy: .public): resting island hidden, peek zone=\(self.dockLayout.peekZone.width, privacy: .public)x\(self.dockLayout.peekZone.height, privacy: .public)pt open zone=\(self.dockLayout.openZone.width, privacy: .public)x\(self.dockLayout.openZone.height, privacy: .public)pt screen above=\(self.screenAbove, privacy: .public)")
         }
     }
 
@@ -299,9 +304,14 @@ final class IslandNoteController: NSObject {
     }
 
     /// 无刘海时某形态在顶边之外的位置：收起滑出、展开滑入都以它为端点，圆角始终可见。
+    /// 上方另有显示器时顶边之外会被看见，只能退回贴住顶边压扁。
     private func retractedPath(for m: Mode) -> CGPath {
-        m == .hover ? peekPath(dockLayout.retracted(hoverRect))
-            : notchPath(dockLayout.retracted(restRect), topR: compactTopR, botR: compactBotR)
+        let shape = m == .hover ? hoverRect : restRect
+        if screenAbove {
+            return notchPath(NSRect(x: shape.minX, y: restRect.maxY, width: shape.width, height: 0), topR: 0, botR: 0)
+        }
+        return m == .hover ? peekPath(dockLayout.retracted(shape))
+            : notchPath(dockLayout.retracted(shape), topR: compactTopR, botR: compactBotR)
     }
 
     /// 屏幕坐标转停靠画布坐标；停靠位置由屏幕决定，不受面板悬浮位置影响。
@@ -315,15 +325,16 @@ final class IslandNoteController: NSObject {
     }
 
     /// 无刘海屏幕的悬停：进入感应区探出细边，贴顶边立即展开，否则停留片刻后展开。
-    private func handleRevealHover(at screenPoint: NSPoint) {
+    /// 拖拽（移动窗口、拖文件）经过菜单栏不算悬停；指针越过顶边到了上方屏幕也不算。
+    private func handleRevealHover(at screenPoint: NSPoint, dragging: Bool) {
         let point = dockCanvasPoint(screenPoint)
-        guard dockLayout.peekZone.contains(point) else {
+        guard !dragging, screenPoint.y <= screenFrame.maxY, dockLayout.peekZone.contains(point) else {
             revealSuppressed = false
             if mode == .hover { goTo(.rest) }
             return
         }
         guard !revealSuppressed else { return }
-        if dockLayout.isAtTopEdge(point) {
+        if !screenAbove, dockLayout.isAtTopEdge(point) {
             dockLogger.debug("Reveal: pointer reached the top edge")
             expand()
             return
@@ -343,10 +354,9 @@ final class IslandNoteController: NSObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + revealDwell, execute: work)
     }
 
-    /// 无刘海时收起的岛体不可见，也不应拦截菜单栏中央的点击。
+    /// 无刘海时收起的岛体不可见。点击穿透依赖窗口透明区域的默认行为，
+    /// 不能写 `ignoresMouseEvents`：一旦显式设为 false，整块透明画布都会吞掉点击。
     private func updateRestInteractivity() {
-        let interactive = hasNotch || mode == .expanded
-        panel.ignoresMouseEvents = !interactive
         island.setAccessibilityElement(hasNotch && mode != .expanded)
         dragInteraction.showsIdleAnchor = hasNotch
     }
@@ -1030,7 +1040,7 @@ final class IslandNoteController: NSObject {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.06, execute: work)
             }
         case .rest where !hasNotch, .hover where !hasNotch:
-            handleRevealHover(at: loc)
+            handleRevealHover(at: loc, dragging: event?.type == .leftMouseDragged)
         case .rest:
             // 悬浮岛体区域 → 立刻弹出
             if screenRect(restRect).insetBy(dx: -14, dy: -10).contains(loc) {
@@ -1055,8 +1065,10 @@ final class IslandNoteController: NSObject {
                 collapse(automatically: true)
             }
         case .rest where !hasNotch, .hover where !hasNotch:
-            // The click belongs to the menu bar beneath the invisible island.
-            if dockLayout.peekZone.contains(dockCanvasPoint(loc)) {
+            // The opaque peek receives its own clicks; anywhere else the click belongs to the menu bar.
+            if mode == .hover, screenRect(hoverRect).insetBy(dx: -4, dy: -4).contains(loc) {
+                expand()
+            } else if dockLayout.peekZone.contains(dockCanvasPoint(loc)) {
                 revealSuppressed = true
                 cancelReveal()
                 if mode == .hover { goTo(.rest) }

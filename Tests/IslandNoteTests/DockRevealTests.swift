@@ -39,10 +39,10 @@ final class DockRevealTests: XCTestCase {
     }
 
     func testRestingIslandIsHiddenAndPassesClicksThrough() throws {
-        try withController { controller, panel, mask, _ in
+        try withController { controller, _, mask, _ in
             XCTAssertFalse(controller.hasNotch)
             XCTAssertEqual(controller.mode, .rest)
-            XCTAssertTrue(panel.ignoresMouseEvents, "The hidden island must not swallow menu bar clicks")
+            // A fully transparent window passes clicks to the menu bar beneath it.
             XCTAssertEqual(try XCTUnwrap(mask.path).boundingBoxOfPath.height, 0, accuracy: 0.001)
         }
     }
@@ -59,7 +59,6 @@ final class DockRevealTests: XCTestCase {
 
             try move(controller, panel, to: approaching)
             XCTAssertEqual(controller.mode, .hover, "Approaching below the menu bar already peeks")
-            XCTAssertTrue(panel.ignoresMouseEvents)
             XCTAssertEqual(try XCTUnwrap(mask.path).boundingBoxOfPath.height, DockBarLayout.peekHeight, accuracy: 0.5)
             settle(0.4)
             XCTAssertEqual(controller.mode, .hover, "Below the menu bar the peek never opens by itself")
@@ -72,7 +71,6 @@ final class DockRevealTests: XCTestCase {
 
             try move(controller, panel, to: inMenuBar); settle(0.5)
             XCTAssertEqual(controller.mode, .expanded, "Resting in the menu bar opens the note")
-            XCTAssertFalse(panel.ignoresMouseEvents)
         }
     }
 
@@ -94,7 +92,10 @@ final class DockRevealTests: XCTestCase {
 
     func testMenuBarClickSuppressesPeekUntilPointerLeaves() throws {
         try withController { controller, panel, _, viewport in
-            let inMenuBar = NSPoint(x: viewport.midX, y: viewport.maxY - 5)
+            // Beside the peek: an ordinary menu bar item under the open zone.
+            let layout = try XCTUnwrap(controller.dockLayout)
+            let inMenuBar = NSPoint(x: layout.hover.maxX + 12, y: viewport.maxY - 5)
+            XCTAssertTrue(layout.openZone.contains(inMenuBar))
             try move(controller, panel, to: inMenuBar)
             XCTAssertEqual(controller.mode, .hover)
             controller.handleClick(try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: inMenuBar,
@@ -106,6 +107,31 @@ final class DockRevealTests: XCTestCase {
             try move(controller, panel, to: NSPoint(x: viewport.midX, y: viewport.maxY - 200))
             try move(controller, panel, to: inMenuBar)
             XCTAssertEqual(controller.mode, .hover, "Coming back re-arms the peek")
+        }
+    }
+
+    func testClickingThePeekOpensTheNote() throws {
+        try withController { controller, panel, _, viewport in
+            let layout = try XCTUnwrap(controller.dockLayout)
+            try move(controller, panel, to: NSPoint(x: viewport.midX, y: layout.peekZone.minY + 2))
+            XCTAssertEqual(controller.mode, .hover)
+            let onPeek = NSPoint(x: layout.hover.midX, y: layout.hover.midY)
+            controller.handleClick(try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown, location: onPeek,
+                modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1)))
+            XCTAssertEqual(controller.mode, .expanded, "The visible peek is the island's own surface")
+        }
+    }
+
+    func testDraggingAcrossTheMenuBarDoesNotReveal() throws {
+        try withController { controller, panel, _, viewport in
+            for point in [NSPoint(x: viewport.midX, y: viewport.maxY - 5), NSPoint(x: viewport.midX, y: viewport.maxY - 1)] {
+                controller.handleHover(try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDragged, location: point,
+                    modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: panel.windowNumber,
+                    context: nil, eventNumber: 0, clickCount: 1, pressure: 1)))
+            }
+            settle(0.4)
+            XCTAssertEqual(controller.mode, .rest, "Moving windows or files past the top edge leaves the note closed")
         }
     }
 
