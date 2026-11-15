@@ -130,6 +130,8 @@ Requires macOS 14 or later and Swift 5.9 or later.
 make run
 ```
 
+`make test` runs everything except the slow panel-resize suite (about half a minute). Run `make test-resize` after changing resize, pinch, drag or docking behaviour, and `make test-all` before a release. A single suite runs with `swift test --filter DockRevealTests`.
+
 `make package` builds a fresh signed `IslandNote.app` without opening it, with an application icon and version metadata. Previous bundles are kept recoverable under the ignored `.build/` directory.
 
 `Resources/AppIcon.svg` is the shared icon source. Run `make icons` to regenerate

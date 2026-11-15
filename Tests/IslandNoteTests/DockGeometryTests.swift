@@ -50,23 +50,37 @@ final class DockGeometryTests: XCTestCase {
         XCTAssertEqual(path.boundingBoxOfPath.height, 0, accuracy: 0.001)
     }
 
-    func testPeekAndRevealZoneWithoutNotch() {
+    func testPeekAndRevealZonesWithoutNotch() {
         let none = NotchMetrics(screenWidth: 1920, safeAreaTop: 0, topLeftArea: nil, topRightArea: nil)
         let layout = DockBarLayout(notch: none, canvasWidth: 1000, canvasTop: 900, menuBarHeight: 24)
         XCTAssertEqual(layout.hover.height, DockBarLayout.peekHeight)
         XCTAssertEqual(layout.hover.maxY, 900)
         XCTAssertEqual(layout.hover.midX, layout.rest.midX)
         XCTAssertLessThan(layout.hover.width, layout.rest.width)
-        XCTAssertEqual(layout.revealZone.minY, 876, "The zone spans the menu bar")
-        XCTAssertTrue(layout.revealZone.contains(NSPoint(x: 500, y: 880)))
-        XCTAssertFalse(layout.revealZone.contains(NSPoint(x: 500, y: 870)), "Window content below stays inert")
-        XCTAssertFalse(layout.revealZone.contains(NSPoint(x: layout.rest.maxX + 20, y: 890)))
+
+        XCTAssertEqual(layout.openZone.minY, 876, "Resting opens only within the menu bar")
+        XCTAssertEqual(layout.peekZone.minY, 876 - DockBarLayout.peekExtraDepth, "The hint starts a little earlier")
+        XCTAssertTrue(layout.peekZone.contains(layout.openZone))
+        XCTAssertTrue(layout.peekZone.contains(NSPoint(x: layout.rest.maxX + 30, y: 870)))
+        XCTAssertFalse(layout.openZone.contains(NSPoint(x: layout.rest.maxX + 30, y: 870)))
+        XCTAssertFalse(layout.peekZone.contains(NSPoint(x: 500, y: 850)), "Window content further down stays inert")
         XCTAssertTrue(layout.isAtTopEdge(NSPoint(x: 500, y: 899)))
         XCTAssertTrue(layout.isAtTopEdge(NSPoint(x: 500, y: 900)))
         XCTAssertFalse(layout.isAtTopEdge(NSPoint(x: 500, y: 890)))
 
         let autoHidden = DockBarLayout(notch: none, canvasWidth: 1000, canvasTop: 900, menuBarHeight: 0)
-        XCTAssertEqual(autoHidden.revealZone.minY, 900 - DockBarLayout.minimumRevealDepth)
+        XCTAssertEqual(autoHidden.openZone.minY, 900 - DockBarLayout.minimumRevealDepth)
+    }
+
+    func testRetractedShapesSitJustBeyondTheTopEdge() {
+        let none = NotchMetrics(screenWidth: 1920, safeAreaTop: 0, topLeftArea: nil, topRightArea: nil)
+        let layout = DockBarLayout(notch: none, canvasWidth: 1000, canvasTop: 900, menuBarHeight: 24)
+        for shape in [layout.rest, layout.hover] {
+            let retracted = layout.retracted(shape)
+            XCTAssertGreaterThan(retracted.minY, 900)
+            XCTAssertEqual(retracted.size, shape.size, "Sliding keeps the rounded shape intact")
+            XCTAssertEqual(retracted.minX, shape.minX)
+        }
     }
 
     private func metrics(width: CGFloat, height: CGFloat) -> NotchMetrics {

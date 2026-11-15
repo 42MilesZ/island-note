@@ -1,9 +1,20 @@
-.PHONY: all build icons package package-dev install-local run notarize audit testflight
+.PHONY: all build test test-resize test-all icons package package-dev install-local run notarize audit testflight
 
 all: package
 
 build:
 	swift build -c release --product IslandNote
+
+# FloatingResizeTests drives real panel animations and takes most of the
+# suite's time; run it only for resize, pinch, drag or docking changes.
+test:
+	swift test --skip FloatingResizeTests
+
+test-resize:
+	swift test --filter FloatingResizeTests
+
+test-all:
+	swift test
 
 icons:
 	./scripts/update-icon.sh
