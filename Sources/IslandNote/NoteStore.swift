@@ -28,6 +28,9 @@ final class NoteStore {
     private var saveWork: DispatchWorkItem?
     private var configurationError: Error?
     private var usesManagedFile: Bool
+    /// A new install: the configuration directory does not exist yet. A user who deleted
+    /// their note keeps the directory, so the recreated note stays empty.
+    private(set) var isNewInstall = false
     private var scopedURL: URL?
     /// Bookmark of the open document. Bookmarks resolve by file identity, so a
     /// note moved or renamed in Finder or Obsidian is followed to its new path.
@@ -43,6 +46,7 @@ final class NoteStore {
 
     init(fileURL: URL? = nil, configurationDirectory: URL? = nil) {
         let directory = configurationDirectory ?? Self.defaultDirectory
+        let directoryExisted = FileManager.default.fileExists(atPath: directory.path)
         self.configurationDirectory = directory
         if let fileURL {
             self.fileURL = fileURL
@@ -92,6 +96,7 @@ final class NoteStore {
             } else {
                 self.fileURL = managed
                 usesManagedFile = true
+                isNewInstall = !directoryExisted
             }
             configurationError = nil
         } catch {
@@ -295,7 +300,8 @@ final class NoteStore {
     func load() throws -> String {
         if let configurationError { throw configurationError }
         relocateIfMoved()
-        let text = try readOrCreate(contents: "")
+        let text = try readOrCreate(contents: isNewInstall ? L10n.tr("StarterNote") : "")
+        isNewInstall = false
         lastLoadedContent = text
         onSaveState?(.saved)
         return text

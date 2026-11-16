@@ -139,6 +139,7 @@ final class NoteEditorView: NSView {
     var onRequestQuit: (() -> Void)?
     var onRequestSync: (() -> Void)?
     var onRequestSettings: (() -> Void)?
+    var onRequestChangeSaveLocation: (() -> Void)?
     var onStatusWidthChanged: ((CGFloat) -> Void)?
 
     var string: String {
@@ -832,6 +833,9 @@ final class NoteEditorView: NSView {
         italic.target = self
         menu.addItem(italic)
         menu.addItem(.separator())
+        let location = NSMenuItem(title: L10n.tr("Change Save Location…"), action: #selector(changeSaveLocation), keyEquivalent: "")
+        location.target = self
+        menu.addItem(location)
         let quit = NSMenuItem(title: L10n.tr("Quit Island Note"), action: #selector(quitFromMenu), keyEquivalent: "")
         quit.target = self
         menu.addItem(quit)
@@ -840,6 +844,7 @@ final class NoteEditorView: NSView {
     @objc private func applyBold() { NotificationCenter.default.post(name: .islandNoteBold, object: nil) }
     @objc private func applyItalic() { NotificationCenter.default.post(name: .islandNoteItalic, object: nil) }
     @objc private func quitFromMenu() { onRequestQuit?() }
+    @objc private func changeSaveLocation() { onRequestChangeSaveLocation?() }
     @objc private func openSyncSettings() {
         statusLogger.info("Status control activated")
         clearStatusHover()

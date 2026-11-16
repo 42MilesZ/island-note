@@ -482,6 +482,12 @@ final class IslandNoteController: NSObject {
             NSApp.terminate(nil)
         }
         editor.onRequestSettings = { [weak self] in self?.showSettings() }
+        editor.onRequestChangeSaveLocation = { [weak self] in
+            // Like Settings, retract the note first: hover and click monitors would otherwise
+            // collapse it underneath the picker, and the picker must not sit below the panel.
+            self?.collapse()
+            DispatchQueue.main.async { self?.chooseNoteFile(saveCopy: true) }
+        }
         // 编辑器只覆盖可见形状（expandedRect）：底边 = 遮罩底边，
         // 原先铺满全窗口时底部 16px gutter 成了「滚得到但永远看不见」的死区。
         editor.frame = expandedRect
@@ -537,6 +543,11 @@ final class IslandNoteController: NSObject {
             self.diagnostics.record(.headerGrabbed, state: self.diagnosticState())
         }
         editor.dragHandle.onMove = { [weak self] in self?.dragInteraction.move(to: $0) }
+        editor.dragHandle.onDoubleClick = { [weak self] in
+            guard let self, self.mode == .expanded, self.dragInteraction.isFloating else { return }
+            self.logger.info("Floating panel returning to island on double-click")
+            self.dragInteraction.cancelAndDock(collapse: false)
+        }
         editor.dragHandle.onEnd = { [weak self] point in
             guard let self else { return }
             self.dragInteraction.end(at: point)
@@ -1183,6 +1194,7 @@ final class IslandNoteController: NSObject {
         picker.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText, .plainText]
         picker.allowsOtherFileTypes = false
         picker.directoryURL = store.fileURL.deletingLastPathComponent()
+        NSApp.activate(ignoringOtherApps: true)
         guard picker.runModal() == .OK, let url = picker.url else { return }
         // Native editor changes publish on the next main-queue turn.
         DispatchQueue.main.async { [weak self] in self?.switchNote(to: url, saveCopy: saveCopy) }
