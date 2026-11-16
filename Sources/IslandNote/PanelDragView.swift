@@ -20,7 +20,7 @@ final class PanelDragView: NSView {
 
     func refreshLocalizedUI() {
         setAccessibilityLabel(L10n.tr("Drag panel"))
-        setAccessibilityHelp(L10n.tr("Drag away to float. Move back to the island and release to dock, or double-click to return. Escape docks and collapses."))
+        setAccessibilityHelp(L10n.tr("Drag away to float. Move back to the island and release to dock. Double-click or press Escape to dock and collapse."))
     }
 
     @available(*, unavailable)

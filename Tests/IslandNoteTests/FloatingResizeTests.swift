@@ -194,8 +194,8 @@ final class FloatingResizeTests: XCTestCase {
         }
     }
 
-    func testDoubleClickingTheHeaderReturnsAFloatingNoteToTheIsland() throws {
-        try withPanel { _, panel, editor, _ in
+    func testDoubleClickingTheHeaderReturnsAFloatingNoteToTheIslandAndCollapses() throws {
+        try withPanel { controller, panel, editor, _ in
             let home = panel.frame.origin, start = header(panel, editor)
             editor.dragHandle.onDoubleClick?()
             settle(0.1)
@@ -203,13 +203,12 @@ final class FloatingResizeTests: XCTestCase {
             let out = NSPoint(x: start.x + 80, y: start.y - 170)
             editor.dragHandle.onBegin?(start); editor.dragHandle.onMove?(out); editor.dragHandle.onEnd?(out)
             settle()
-            let floating = editor.frame.size
             XCTAssertEqual(panel.level, .floating)
             editor.dragHandle.onDoubleClick?()
             settle()
             XCTAssertEqual(panel.frame.origin, home)
             XCTAssertEqual(panel.level, .screenSaver)
-            XCTAssertEqual(editor.frame.size, floating)
+            XCTAssertNotEqual(controller.mode, .expanded)
         }
     }
 

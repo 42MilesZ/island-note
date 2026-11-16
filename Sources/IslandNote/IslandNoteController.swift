@@ -551,8 +551,8 @@ final class IslandNoteController: NSObject {
         editor.dragHandle.onMove = { [weak self] in self?.dragInteraction.move(to: $0) }
         editor.dragHandle.onDoubleClick = { [weak self] in
             guard let self, self.mode == .expanded, self.dragInteraction.isFloating else { return }
-            self.logger.info("Floating panel returning to island on double-click")
-            self.dragInteraction.cancelAndDock(collapse: false)
+            self.logger.info("Floating panel returning to island and collapsing on double-click")
+            self.dragInteraction.cancelAndDock(collapse: true)
         }
         editor.dragHandle.onEnd = { [weak self] point in
             guard let self else { return }
