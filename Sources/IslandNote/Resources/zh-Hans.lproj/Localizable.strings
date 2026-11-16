@@ -355,4 +355,4 @@
 "%@ was moved, renamed or deleted. Open Settings and choose Open Existing File… to select it again." = "%@ 已被移动、重命名或删除。请打开设置，选择“打开已有文件…”重新选中它。";
 
 /* Note created for a new install. */
-"StarterNote" = "# 欢迎使用 Island Note\n\n- 指针移到屏幕顶部中央即可打开，也可以从菜单栏图标的菜单里打开\n- 按 Esc 收起\n- 按住顶部把手拖出，变成悬浮窗；拖回灵动岛附近松手即可放回，或双击顶部把手收回\n- 双指捏合调整大小；悬浮时也可以拖动边缘和四角\n- 右键可设置加粗、斜体，或更改保存位置\n- 笔记是普通的 Markdown 文件，可以同时用 Obsidian 等编辑器打开\n- 标题达到三个时，左侧会出现目录，点击即可跳转\n\n看完可以删掉这些，直接开始记录。\n";
+"StarterNote" = "# 欢迎使用 Island Note\n\n- 鼠标移到灵动岛附近即可打开\n- 按住顶部把手拖出，变成悬浮窗；拖回灵动岛附近松手即可放回（按 Esc 或双击顶部区域也可收起）\n- 双指捏合或拖动四角调整大小\n- 可在设置中更改笔记保存位置\n- 笔记支持 Markdown 文件格式，例如支持「# 大标题」「**加粗**」等等\n\n看完可以删掉这些，开始记录吧\n";

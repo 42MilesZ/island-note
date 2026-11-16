@@ -170,7 +170,9 @@ final class PanelResizeHandle: NSView {
     override func mouseUp(with event: NSEvent) { onEnd?(screenPoint(event)); window?.invalidateCursorRects(for: self) }
 }
 
-/// A transparent sibling of the editor: only its narrow edges receive input.
+/// A transparent sibling of the editor: only its corners receive input.
+/// A floating note offers all four; a docked note keeps its top edge on the island,
+/// so only the bottom corners are offered.
 final class PanelResizeView: NSView {
     static let outsideReach: CGFloat = 14
     private static let insideReach: CGFloat = 34
@@ -180,6 +182,9 @@ final class PanelResizeView: NSView {
     var isEnabled = false {
         didSet { isHidden = !isEnabled }
     }
+    var allowsTopCorners = true {
+        didSet { for handle in handles where handle.edges.contains(.top) { handle.isHidden = !allowsTopCorners } }
+    }
     var panelRect = NSRect.zero { didSet { if panelRect != oldValue { layoutHandles() } } }
     var statusButtonWidth: CGFloat = 24 { didSet { if statusButtonWidth != oldValue { layoutHandles() } } }
     private var handles: [PanelResizeHandle] = []
@@ -187,7 +192,7 @@ final class PanelResizeView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         isHidden = true
-        let edgeSets: [PanelResizeEdges] = [.left, .right, .bottom, .top, [.left, .bottom], [.right, .bottom], [.left, .top], [.right, .top]]
+        let edgeSets: [PanelResizeEdges] = [[.left, .bottom], [.right, .bottom], [.left, .top], [.right, .top]]
         for edges in edgeSets {
             let handle = PanelResizeHandle(edges: edges)
             handle.onBegin = { [weak self] point in self?.onBegin?(edges, point) }
@@ -202,7 +207,7 @@ final class PanelResizeView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard isEnabled else { return nil }
-        return handles.reversed().first { $0.containsResizePoint(convert(point, to: $0)) }
+        return handles.reversed().first { !$0.isHidden && $0.containsResizePoint(convert(point, to: $0)) }
     }
 
     func resizeCursor(at point: NSPoint) -> NSCursor? { (hitTest(point) as? PanelResizeHandle)?.resizeCursor }
@@ -214,16 +219,9 @@ final class PanelResizeView: NSView {
         let statusRect = NSRect(x: r.maxX - 15 - statusButtonWidth, y: r.maxY - 31, width: statusButtonWidth, height: 24)
             .insetBy(dx: -StatusIndicatorButton.hoverPadding, dy: -StatusIndicatorButton.hoverPadding)
         for handle in handles {
-            switch handle.edges {
-            case .left: handle.frame = NSRect(x: r.minX - 7, y: r.minY + inside, width: 14, height: max(0, r.height - inside * 2))
-            case .right: handle.frame = NSRect(x: r.maxX - 7, y: r.minY + inside, width: 14, height: max(0, r.height - inside * 2))
-            case .bottom: handle.frame = NSRect(x: r.minX + inside, y: r.minY - 7, width: max(0, r.width - inside * 2), height: 14)
-            case .top: handle.frame = NSRect(x: r.minX + inside, y: r.maxY - 7, width: max(0, r.width - inside * 2), height: 14)
-            default:
-                handle.frame = NSRect(x: handle.edges.contains(.left) ? r.minX - outside : r.maxX - inside,
-                                      y: handle.edges.contains(.bottom) ? r.minY - outside : r.maxY - inside,
-                                      width: inside + outside, height: inside + outside)
-            }
+            handle.frame = NSRect(x: handle.edges.contains(.left) ? r.minX - outside : r.maxX - inside,
+                                  y: handle.edges.contains(.bottom) ? r.minY - outside : r.maxY - inside,
+                                  width: inside + outside, height: inside + outside)
             handle.excludedRect = statusRect.offsetBy(dx: -handle.frame.minX, dy: -handle.frame.minY)
             handle.updateTrackingAreas()
             window?.invalidateCursorRects(for: handle)
