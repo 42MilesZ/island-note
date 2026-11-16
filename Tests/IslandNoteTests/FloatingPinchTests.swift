@@ -98,7 +98,9 @@ final class FloatingPinchTests: XCTestCase {
         settle()
         XCTAssertEqual(panel.level, .screenSaver)
         XCTAssertEqual(panel.frame.origin, home)
-        XCTAssertEqual(editor.frame.size, PanelSize.standard.dimensions)
+        // Docking keeps the size the note floated with.
+        XCTAssertEqual(editor.frame.width, initialSize.width * 1.1 * 0.95, accuracy: 0.1)
+        XCTAssertEqual(editor.frame.height, initialSize.height * 1.1 * 0.95, accuracy: 0.1)
         controller.collapse()
         settle()
         XCTAssertEqual(controller.mode, .rest)

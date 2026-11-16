@@ -10,10 +10,31 @@ final class NoteConfigurationTests: XCTestCase {
     }
 
     func testNewInstallCreatesOnlyManagedNote() throws {
-        try fixture { directory in
+        try fixture { parent in
+            let directory = parent.appendingPathComponent("Island Note")
             let store = NoteStore(configurationDirectory: directory)
-            XCTAssertEqual(try store.load(), "")
+            let starter = try store.load()
+            XCTAssertTrue(starter.hasPrefix("# "), "A new install starts with the starter note")
+            XCTAssertNotEqual(starter, "StarterNote", "The starter note is localized")
             XCTAssertEqual(store.fileURL, directory.appendingPathComponent("Island Note.md"))
+            XCTAssertEqual(try String(contentsOf: store.fileURL, encoding: .utf8), starter)
+        }
+    }
+
+    func testExistingInstallDoesNotReceiveStarterText() throws {
+        try fixture { directory in
+            // A deleted default note is recreated empty: the directory shows an earlier install.
+            XCTAssertEqual(try NoteStore(configurationDirectory: directory).load(), "")
+            try "".write(to: directory.appendingPathComponent("Island Note.md"), atomically: true, encoding: .utf8)
+            XCTAssertEqual(try NoteStore(configurationDirectory: directory).load(), "")
+        }
+    }
+
+    func testStarterNoteExistsInEveryLanguage() {
+        for language in [AppLanguage.english, .chinese] {
+            let text = L10n.tr("StarterNote", language: language)
+            XCTAssertTrue(text.hasPrefix("# "), "\(language)")
+            XCTAssertLessThanOrEqual(DocumentLimits.count(text), DocumentLimits.limit)
         }
     }
 

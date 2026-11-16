@@ -6,7 +6,9 @@ final class PanelDragView: NSView {
     var onBegin: ((NSPoint) -> Void)?
     var onMove: ((NSPoint) -> Void)?
     var onEnd: ((NSPoint) -> Void)?
+    var onDoubleClick: (() -> Void)?
     private var hoverArea: NSTrackingArea?
+    private var pressPoint: NSPoint?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -18,7 +20,7 @@ final class PanelDragView: NSView {
 
     func refreshLocalizedUI() {
         setAccessibilityLabel(L10n.tr("Drag panel"))
-        setAccessibilityHelp(L10n.tr("Drag away to float. Move back to the island and release to dock. Escape docks and collapses."))
+        setAccessibilityHelp(L10n.tr("Drag away to float. Move back to the island and release to dock, or double-click to return. Escape docks and collapses."))
     }
 
     @available(*, unavailable)
@@ -38,11 +40,17 @@ final class PanelDragView: NSView {
     override func mouseExited(with event: NSEvent) { setHovered(false) }
     override func mouseDown(with event: NSEvent) {
         NSCursor.closedHand.set()
+        pressPoint = screenPoint(for: event)
         onBegin?(screenPoint(for: event))
     }
     override func mouseDragged(with event: NSEvent) { onMove?(screenPoint(for: event)) }
     override func mouseUp(with event: NSEvent) {
-        onEnd?(screenPoint(for: event))
+        let point = screenPoint(for: event)
+        onEnd?(point)
+        // A quick re-grab that moves is a drag, not a double-click.
+        if event.clickCount == 2, let press = pressPoint,
+           PanelDocking.distance(press, point) < PanelDocking.dragThreshold { onDoubleClick?() }
+        pressPoint = nil
         let hovered = bounds.contains(convert(event.locationInWindow, from: nil))
         setHovered(hovered)
         (hovered ? NSCursor.openHand : NSCursor.arrow).set()

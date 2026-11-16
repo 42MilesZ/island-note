@@ -9,11 +9,4 @@ enum PanelSize: String {
         case .large: return NSSize(width: 690, height: 550)
         }
     }
-
-    var floatingDimensions: NSSize {
-        switch self {
-        case .standard: return NSSize(width: 420, height: 460)
-        case .large: return NSSize(width: 560, height: 620)
-        }
-    }
 }

@@ -53,7 +53,7 @@
 "Check Grammar With Spelling" = "Check Grammar With Spelling";
 "Correct Spelling Automatically" = "Correct Spelling Automatically";
 "Drag panel" = "Drag panel";
-"Drag away to float. Move back to the island and release to dock. Escape docks and collapses." = "Drag away to float. Move back to the island and release to dock. Escape docks and collapses.";
+"Drag away to float. Move back to the island and release to dock, or double-click to return. Escape docks and collapses." = "Drag away to float. Move back to the island and release to dock, or double-click to return. Escape docks and collapses.";
 "Heading %d: %@" = "Heading %d: %@";
 "Current section" = "Current section";
 "Scroll to this section" = "Scroll to this section";
@@ -353,3 +353,6 @@
 "Save this note at a new location. The previous file is kept." = "Save this note at a new location. The previous file is kept.";
 "Edit an existing file and save back to it." = "Edit an existing file and save back to it.";
 "%@ was moved, renamed or deleted. Open Settings and choose Open Existing File… to select it again." = "%@ was moved, renamed or deleted. Open Settings and choose Open Existing File… to select it again.";
+
+/* Note created for a new install. */
+"StarterNote" = "# Welcome to Island Note\n\n- Move the pointer near the island to open it\n- Hold the top handle and drag to float the note; release it near the island to put it back (Esc or double-clicking the top area also tucks it away)\n- Pinch or drag the corners to resize\n- Change where the note is saved in Settings\n- Notes are Markdown files, so “# Heading”, “**bold**” and the like work\n\nDelete this whenever you like and start writing\n";

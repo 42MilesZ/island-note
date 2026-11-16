@@ -102,46 +102,48 @@ final class FloatingResizeTests: XCTestCase {
             editor.dragHandle.onBegin?(start)
             editor.dragHandle.onMove?(release)
             settle(0.12)
-            XCTAssertLessThan(editor.frame.width, original.width)
-            XCTAssertGreaterThan(editor.frame.height, original.height)
+            // Detaching keeps the docked size; only the floating minimum height applies.
+            let detached = NSSize(width: original.width, height: max(original.height, FloatingPanelLayout.minimum.height))
+            XCTAssertEqual(editor.frame.width, detached.width, accuracy: 0.5)
+            XCTAssertEqual(editor.frame.height, detached.height, accuracy: 6)
             let intermediate = screenRect(panel, editor)
             XCTAssertEqual(intermediate.minX + intermediate.width * 36 / original.width, release.x, accuracy: 1)
             XCTAssertEqual(intermediate.maxY - PanelDocking.headerInset, release.y, accuracy: 1)
             editor.dragHandle.onEnd?(release)
             settle()
-            XCTAssertEqual(editor.frame.size, PanelSize.standard.floatingDimensions)
+            XCTAssertEqual(editor.frame.size, detached)
             XCTAssertEqual(panel.level, .floating)
             try snapshot(editor, name: "floating-default")
 
             let before = screenRect(panel, editor)
             var mouse = NSPoint(x: before.maxX, y: before.midY)
-            controller.beginEdgeResize(edges: .right, at: mouse)
+            controller.beginEdgeResize(edges: [.right, .bottom], at: mouse)
             mouse.x += 100
             controller.endEdgeResize(at: mouse)
             let wider = screenRect(panel, editor)
-            XCTAssertEqual(wider.width, 520, accuracy: 0.1)
+            XCTAssertEqual(wider.width, detached.width + 100, accuracy: 0.1)
             XCTAssertEqual(wider.minX, before.minX, accuracy: 0.1)
             XCTAssertEqual(wider.maxY, before.maxY, accuracy: 0.1)
             mouse = NSPoint(x: wider.midX, y: wider.minY)
-            controller.beginEdgeResize(edges: .bottom, at: mouse)
+            controller.beginEdgeResize(edges: [.right, .bottom], at: mouse)
             mouse.y -= 80
             controller.endEdgeResize(at: mouse)
             let taller = screenRect(panel, editor)
-            XCTAssertEqual(taller.height, 540, accuracy: 0.1)
+            XCTAssertEqual(taller.height, detached.height + 80, accuracy: 0.1)
             XCTAssertEqual(taller.maxY, wider.maxY, accuracy: 0.1)
             mouse = NSPoint(x: taller.minX, y: taller.maxY)
             controller.beginEdgeResize(edges: [.left, .top], at: mouse)
             mouse.x -= 40; mouse.y += 60
             controller.endEdgeResize(at: mouse)
             let corner = screenRect(panel, editor)
-            XCTAssertEqual(corner.size, NSSize(width: 560, height: 600))
+            XCTAssertEqual(corner.size, NSSize(width: detached.width + 140, height: detached.height + 140))
             XCTAssertEqual(corner.maxX, taller.maxX, accuracy: 0.1)
             XCTAssertEqual(corner.minY, taller.minY, accuracy: 0.1)
             pinch(controller, editor: editor, delta: -0.1)
             settle()
             let custom = editor.frame.size
-            XCTAssertEqual(custom.width, 504, accuracy: 0.1)
-            XCTAssertEqual(custom.height, 540, accuracy: 0.1)
+            XCTAssertEqual(custom.width, corner.width * 0.9, accuracy: 0.1)
+            XCTAssertEqual(custom.height, corner.height * 0.9, accuracy: 0.1)
             try snapshot(editor, name: "floating-custom")
             XCTAssertEqual(text.string, source)
             XCTAssertEqual(text.selectedRange(), selection)
@@ -154,7 +156,9 @@ final class FloatingResizeTests: XCTestCase {
             editor.dragHandle.onEnd?(dockPoint)
             settle(0.7)
             XCTAssertEqual(panel.frame.origin, home)
-            XCTAssertEqual(editor.frame.size, PanelSize.standard.dimensions)
+            // Docking keeps the floating size too.
+            XCTAssertEqual(editor.frame.width, custom.width, accuracy: 0.1)
+            XCTAssertEqual(editor.frame.height, custom.height, accuracy: 0.1)
             let out = NSPoint(x: dockPoint.x + 80, y: dockPoint.y - 170)
             editor.dragHandle.onBegin?(dockPoint)
             editor.dragHandle.onMove?(out)
@@ -162,6 +166,84 @@ final class FloatingResizeTests: XCTestCase {
             settle()
             XCTAssertEqual(editor.frame.size.width, custom.width, accuracy: 0.1)
             XCTAssertEqual(editor.frame.size.height, custom.height, accuracy: 0.1)
+        }
+    }
+
+    func testDockingCapsEachSideAndDetachingRestoresTheFloatingSize() throws {
+        try withPanel { controller, panel, editor, _ in
+            let home = panel.frame.origin, start = header(panel, editor)
+            let out = NSPoint(x: start.x + 80, y: start.y - 170)
+            editor.dragHandle.onBegin?(start); editor.dragHandle.onMove?(out); editor.dragHandle.onEnd?(out)
+            settle()
+            var mouse = NSPoint(x: screenRect(panel, editor).midX, y: screenRect(panel, editor).minY)
+            controller.beginEdgeResize(edges: [.right, .bottom], at: mouse)
+            mouse.y -= 2000
+            controller.endEdgeResize(at: mouse)
+            let floating = editor.frame.size
+            let back = header(panel, editor)
+            editor.dragHandle.onBegin?(back); editor.dragHandle.onMove?(start); editor.dragHandle.onEnd?(start)
+            settle(1.1)
+            XCTAssertEqual(panel.frame.origin, home)
+            // Only the side that exceeds the dock is capped; the width stays.
+            XCTAssertEqual(editor.frame.width, floating.width, accuracy: 0.1)
+            XCTAssertLessThanOrEqual(editor.frame.height, floating.height)
+            editor.dragHandle.onBegin?(start); editor.dragHandle.onMove?(out); editor.dragHandle.onEnd?(out)
+            settle()
+            XCTAssertEqual(editor.frame.width, floating.width, accuracy: 0.1)
+            XCTAssertEqual(editor.frame.height, floating.height, accuracy: 0.1)
+        }
+    }
+
+    func testDoubleClickingTheHeaderReturnsAFloatingNoteToTheIsland() throws {
+        try withPanel { _, panel, editor, _ in
+            let home = panel.frame.origin, start = header(panel, editor)
+            editor.dragHandle.onDoubleClick?()
+            settle(0.1)
+            XCTAssertEqual(panel.frame.origin, home, "A docked note ignores the double-click")
+            let out = NSPoint(x: start.x + 80, y: start.y - 170)
+            editor.dragHandle.onBegin?(start); editor.dragHandle.onMove?(out); editor.dragHandle.onEnd?(out)
+            settle()
+            let floating = editor.frame.size
+            XCTAssertEqual(panel.level, .floating)
+            editor.dragHandle.onDoubleClick?()
+            settle()
+            XCTAssertEqual(panel.frame.origin, home)
+            XCTAssertEqual(panel.level, .screenSaver)
+            XCTAssertEqual(editor.frame.size, floating)
+        }
+    }
+
+    func testDockedNoteResizesFreelyFromItsBottomCornersOnly() throws {
+        try withPanel { controller, panel, editor, _ in
+            let home = panel.frame.origin
+            let before = screenRect(panel, editor)
+            // A top corner would pull the note off the island.
+            controller.beginEdgeResize(edges: [.left, .top], at: NSPoint(x: before.minX, y: before.maxY))
+            controller.endEdgeResize(at: NSPoint(x: before.minX - 40, y: before.maxY + 40))
+            XCTAssertEqual(screenRect(panel, editor), before)
+
+            var mouse = NSPoint(x: before.maxX, y: before.minY)
+            controller.beginEdgeResize(edges: [.right, .bottom], at: mouse)
+            mouse.x += 40; mouse.y -= 30
+            controller.moveEdgeResize(to: mouse)
+            controller.handleHover()
+            XCTAssertEqual(controller.mode, .expanded, "Resizing does not collapse the note")
+            controller.endEdgeResize(at: mouse)
+            let wider = screenRect(panel, editor)
+            XCTAssertEqual(panel.frame.origin, home)
+            XCTAssertEqual(wider.width, before.width + 80, accuracy: 0.1, "The note stays centred under the island")
+            XCTAssertEqual(wider.height, before.height + 30, accuracy: 0.1)
+            XCTAssertEqual(wider.midX, before.midX, accuracy: 0.1)
+            XCTAssertEqual(wider.maxY, before.maxY, accuracy: 0.1)
+
+            // Width and height change independently.
+            mouse = NSPoint(x: wider.minX, y: wider.minY)
+            controller.beginEdgeResize(edges: [.left, .bottom], at: mouse)
+            mouse.x += 30
+            controller.endEdgeResize(at: mouse)
+            let narrower = screenRect(panel, editor)
+            XCTAssertEqual(narrower.width, wider.width - 60, accuracy: 0.1)
+            XCTAssertEqual(narrower.height, wider.height, accuracy: 0.1)
         }
     }
 
@@ -180,7 +262,7 @@ final class FloatingResizeTests: XCTestCase {
             editor.dragHandle.onBegin?(start)
             editor.dragHandle.onMove?(release)
             editor.dragHandle.onEnd?(release)
-            // The return flight is over, but the floating aspect morph is still active.
+            // The return flight is over while the detach animation may still be settling.
             settle(0.27)
             let before = screenRect(panel, editor)
             let grip = NSPoint(x: before.minX + before.width * 0.15, y: before.maxY - PanelDocking.headerInset)
@@ -197,7 +279,8 @@ final class FloatingResizeTests: XCTestCase {
             XCTAssertEqual(after.maxY - PanelDocking.headerInset, moved.y, accuracy: 1)
             editor.dragHandle.onEnd?(moved)
             settle()
-            XCTAssertEqual(editor.frame.size, PanelSize.standard.floatingDimensions)
+            XCTAssertEqual(editor.frame.width, 506, accuracy: 0.001)
+            XCTAssertEqual(editor.frame.height, 302.5, accuracy: 0.001)
         }
     }
 
@@ -220,13 +303,14 @@ final class FloatingResizeTests: XCTestCase {
             settle(1.1)
             XCTAssertEqual(panel.level, .screenSaver)
             XCTAssertEqual(editor.frame.width, 506, accuracy: 0.001)
-            XCTAssertEqual(editor.frame.height, 302.5, accuracy: 0.001)
+            // Docked back at the floating minimum height (280), then pinched.
+            XCTAssertEqual(editor.frame.height, 308, accuracy: 0.001)
             XCTAssertTrue(diagnostics.events.contains { $0.reason == .resizeCompleted && abs($0.state.width - 506) < 0.001 })
             // A second gesture continues resizing instead of stopping at a preset.
             pinch(controller, editor: editor, delta: 0.1)
             settle()
             XCTAssertEqual(editor.frame.width, 556.6, accuracy: 0.001)
-            XCTAssertEqual(editor.frame.height, 332.75, accuracy: 0.001)
+            XCTAssertEqual(editor.frame.height, 338.8, accuracy: 0.001)
             XCTAssertFalse(diagnostics.events.contains { $0.reason == .presetLimit })
             XCTAssertFalse(controller.handleMagnification(delta: 0.1, phase: .began, locationInWindow: NSPoint(x: -1000, y: -1000)))
             XCTAssertEqual(diagnostics.events.last?.reason, .outsidePanel)
@@ -302,7 +386,7 @@ final class FloatingResizeTests: XCTestCase {
         }
     }
 
-    func testZeroMotionFloatingPinchResumesDetachmentMorph() throws {
+    func testZeroMotionFloatingPinchKeepsDetachedSize() throws {
         try withPanel { controller, panel, editor, _ in
             let start = header(panel, editor)
             let release = NSPoint(x: start.x + 80, y: start.y - 170)
@@ -311,7 +395,7 @@ final class FloatingResizeTests: XCTestCase {
             editor.dragHandle.onEnd?(release)
             pinch(controller, editor: editor, delta: 0)
             settle()
-            XCTAssertEqual(editor.frame.size, PanelSize.standard.floatingDimensions)
+            XCTAssertEqual(editor.frame.size, FloatingPanelLayout.clamped(PanelSize.standard.dimensions, maximum: NSSize(width: 4000, height: 4000)))
         }
     }
 
@@ -340,7 +424,7 @@ final class FloatingResizeTests: XCTestCase {
             settle(0.07)
             let beforeEdge = screenRect(panel, editor)
             let mouse = NSPoint(x: beforeEdge.maxX, y: beforeEdge.midY)
-            controller.beginEdgeResize(edges: .right, at: mouse)
+            controller.beginEdgeResize(edges: [.right, .bottom], at: mouse)
             controller.endEdgeResize(at: NSPoint(x: mouse.x + 40, y: mouse.y))
             let customized = editor.frame.size
             XCTAssertEqual(customized.width, beforeEdge.width + 40, accuracy: 0.01)
@@ -457,7 +541,8 @@ final class FloatingResizeTests: XCTestCase {
             XCTAssertTrue(controller.handleMagnification(delta: 0, phase: .ended, locationInWindow: location))
             settle(1.1)
             XCTAssertEqual(editor.frame.width, 460 * factor * 0.99, accuracy: 0.001)
-            XCTAssertEqual(editor.frame.height, 275 * factor * 0.99, accuracy: 0.001)
+            // The note returns at the size it floated with (the floating minimum height).
+            XCTAssertEqual(editor.frame.height, FloatingPanelLayout.minimum.height * factor * 0.99, accuracy: 0.001)
             XCTAssertEqual(diagnostics.events.last?.reason, .resizeCompleted)
         }
     }
@@ -493,7 +578,7 @@ final class FloatingResizeTests: XCTestCase {
             editor.dragHandle.onBegin?(start); editor.dragHandle.onMove?(out); editor.dragHandle.onEnd?(out)
             settle()
             let rect = screenRect(panel, editor)
-            controller.beginEdgeResize(edges: .right, at: NSPoint(x: rect.maxX, y: rect.midY))
+            controller.beginEdgeResize(edges: [.right, .bottom], at: NSPoint(x: rect.maxX, y: rect.midY))
             let location = NSPoint(x: editor.frame.midX, y: editor.frame.midY)
             XCTAssertFalse(controller.handleMagnification(delta: 0.01, phase: .began,
                 locationInWindow: location, pressedMouseButtons: 1))

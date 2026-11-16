@@ -53,7 +53,7 @@
 "Check Grammar With Spelling" = "检查拼写与语法";
 "Correct Spelling Automatically" = "自动纠正拼写";
 "Drag panel" = "拖动面板";
-"Drag away to float. Move back to the island and release to dock. Escape docks and collapses." = "拖离灵动岛成为悬浮面板，拖回附近松手即可吸附。按 Esc 回到灵动岛并收起。";
+"Drag away to float. Move back to the island and release to dock, or double-click to return. Escape docks and collapses." = "拖离灵动岛成为悬浮面板，拖回附近松手即可吸附，也可双击顶部收回。按 Esc 回到灵动岛并收起。";
 "Heading %d: %@" = "%d 级标题：%@";
 "Current section" = "当前章节";
 "Scroll to this section" = "滚动到此章节";
@@ -353,3 +353,6 @@
 "Save this note at a new location. The previous file is kept." = "将笔记保存到新位置，原文件会保留。";
 "Edit an existing file and save back to it." = "打开已有文件并将修改保存回原文件。";
 "%@ was moved, renamed or deleted. Open Settings and choose Open Existing File… to select it again." = "%@ 已被移动、重命名或删除。请打开设置，选择“打开已有文件…”重新选中它。";
+
+/* Note created for a new install. */
+"StarterNote" = "# 欢迎使用 Island Note\n\n- 鼠标移到灵动岛附近即可打开\n- 按住顶部把手拖出，变成悬浮窗；拖回灵动岛附近松手即可放回（按 Esc 或双击顶部区域也可收起）\n- 双指捏合或拖动四角调整大小\n- 可在设置中更改笔记保存位置\n- 笔记支持 Markdown 文件格式，例如支持「# 大标题」「**加粗**」等等\n\n看完可以删掉这些，开始记录吧\n";

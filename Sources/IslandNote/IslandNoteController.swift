@@ -6,6 +6,9 @@ import OSLog
 final class IslandView: NSView {
     override var isFlipped: Bool { false } // 原点左下，顶 = maxY
     var hitRect = NSRect.zero
+    /// When set, only this part of `hitRect` is solid; the rest only reaches subviews
+    /// (the corner handles' outer parts) and otherwise passes clicks through.
+    var solidRect = NSRect.zero
     var onAccessibilityPress: (() -> Void)?
 
     override func accessibilityPerformPress() -> Bool {
@@ -21,7 +24,9 @@ final class IslandView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         if !hitRect.isEmpty && !hitRect.contains(point) { return nil }
-        return super.hitTest(point)
+        let hit = super.hitTest(point)
+        if hit === self, !solidRect.isEmpty, !solidRect.contains(point) { return nil }
+        return hit
     }
 }
 
@@ -95,8 +100,23 @@ final class IslandPanel: NSPanel {
             NSApp.terminate(nil)
             return true
         default:
+            // ⌘ with arrows / delete / Home / End are text-system bindings
+            // (moveToBeginningOfLine:, deleteToBeginningOfLine: …), not key equivalents.
+            // Hand them back so keyDown reaches the text view's interpretKeyEvents.
+            if Self.isTextNavigationKey(event), firstResponder is NSTextView {
+                return super.performKeyEquivalent(with: event)
+            }
             return true
         }
+    }
+
+    static func isTextNavigationKey(_ event: NSEvent) -> Bool {
+        guard let scalar = event.charactersIgnoringModifiers?.unicodeScalars.first else { return false }
+        let keys: [Int] = [NSUpArrowFunctionKey, NSDownArrowFunctionKey, NSLeftArrowFunctionKey,
+                           NSRightArrowFunctionKey, NSHomeFunctionKey, NSEndFunctionKey,
+                           NSPageUpFunctionKey, NSPageDownFunctionKey, NSDeleteFunctionKey,
+                           NSDeleteCharacter, NSBackspaceCharacter]
+        return keys.contains(Int(scalar.value))
     }
 }
 
@@ -467,6 +487,12 @@ final class IslandNoteController: NSObject {
             NSApp.terminate(nil)
         }
         editor.onRequestSettings = { [weak self] in self?.showSettings() }
+        editor.onRequestChangeSaveLocation = { [weak self] in
+            // Like Settings, retract the note first: hover and click monitors would otherwise
+            // collapse it underneath the picker, and the picker must not sit below the panel.
+            self?.collapse()
+            DispatchQueue.main.async { self?.chooseNoteFile(saveCopy: true) }
+        }
         // 编辑器只覆盖可见形状（expandedRect）：底边 = 遮罩底边，
         // 原先铺满全窗口时底部 16px gutter 成了「滚得到但永远看不见」的死区。
         editor.frame = expandedRect
@@ -517,11 +543,17 @@ final class IslandNoteController: NSObject {
             self.pendingDockedSize = nil
             self.editor.frame = self.expandedRect
             self.hitGate.hitRect = self.expandedRect
+            self.hitGate.solidRect = .zero
             self.island.hitRect = self.expandedRect
             self.dragInteraction.begin(at: point)
             self.diagnostics.record(.headerGrabbed, state: self.diagnosticState())
         }
         editor.dragHandle.onMove = { [weak self] in self?.dragInteraction.move(to: $0) }
+        editor.dragHandle.onDoubleClick = { [weak self] in
+            guard let self, self.mode == .expanded, self.dragInteraction.isFloating else { return }
+            self.logger.info("Floating panel returning to island on double-click")
+            self.dragInteraction.cancelAndDock(collapse: false)
+        }
         editor.dragHandle.onEnd = { [weak self] point in
             guard let self else { return }
             self.dragInteraction.end(at: point)
@@ -582,14 +614,14 @@ final class IslandNoteController: NSObject {
             applyViewport(size: fitted)
         } else if !dragInteraction.isInteracting {
             resetPinchGesture()
+            interruptEdgeResize()
             pendingDockedSize = nil
             stopViewportAnimation()
-            dockedSize = magnifiedRect(dockedScreenRect(size: dockedSize), delta: 0, floating: false).rect.size
+            dockedSize = dockedFit(dockedSize)
             applyViewport(size: dockedSize)
         }
         if !dragInteraction.preventsCollapse {
-            hitGate.hitRect = rect(for: mode)
-            island.hitRect = rect(for: mode)
+            updateViewportHitAreas()
             maskLayer.path = shapePath(for: mode)
         }
         updateRestInteractivity()
@@ -688,15 +720,22 @@ final class IslandNoteController: NSObject {
 
     private func changeFloatingLayout(_ floating: Bool) {
         interruptEdgeResize()
-        resizeHandles.isEnabled = floating
+        updateResizeHandles()
+        // Detaching and docking keep the note's current size; only each mode's limits apply.
+        let current = targetViewportSize ?? expandedRect.size
+        let size: NSSize
         if floating {
-            let size = FloatingPanelLayout.clamped(floatingSize ?? PanelSize.standard.floatingDimensions,
-                                                    maximum: floatingMaximum())
+            // An untouched docked note is the last floating size fitted to the dock;
+            // detaching it again restores that size rather than a mid-flight or clipped one.
+            let restoresFloating = floatingSize.map { dockedFit($0) == dockedSize } ?? false
+            size = FloatingPanelLayout.clamped(restoresFloating ? floatingSize! : current, maximum: floatingMaximum())
             floatingSize = size
-            animateViewport(to: size)
         } else {
-            animateViewport(to: dockedSize)
+            size = dockedFit(current)
+            dockedSize = size
         }
+        logger.info("Floating layout \(floating, privacy: .public) applied at \(Int(size.width), privacy: .public)×\(Int(size.height), privacy: .public)")
+        animateViewport(to: size)
         updateViewportHitAreas()
         diagnostics.record(.floatingChanged, state: diagnosticState())
     }
@@ -800,6 +839,16 @@ final class IslandNoteController: NSObject {
         }
     }
 
+    /// Docked limits per axis, so a tall or wide floating note is only capped where it exceeds them.
+    private func dockedFit(_ size: NSSize) -> NSSize {
+        let visible = notchScreen().visibleFrame
+        let maxWidth = min(eW - gutter * 2, 2 * min(screenFrame.midX - visible.minX, visible.maxX - screenFrame.midX))
+        let maxHeight = min(canvasTop - gutter, screenFrame.maxY - visible.minY)
+        return NSSize(width: min(maxWidth, max(min(Self.dockedMinimum.width, maxWidth), size.width)),
+                      height: min(maxHeight, max(min(Self.dockedMinimum.height, maxHeight), size.height)))
+    }
+    private static let dockedMinimum = NSSize(width: 320, height: 190)
+
     private func dockedScreenRect(size: NSSize) -> NSRect {
         viewportFrame(size: size).offsetBy(dx: screenFrame.midX - eW / 2,
                                           dy: screenFrame.maxY - canvasTop)
@@ -816,7 +865,7 @@ final class IslandNoteController: NSObject {
         let height = min(canvasTop - gutter, screenFrame.maxY - visible.minY)
         let bounds = NSRect(x: screenFrame.midX - width / 2, y: screenFrame.maxY - height, width: width, height: height)
         return FloatingPanelLayout.magnified(rect, delta: delta, maximum: bounds.size, screen: bounds,
-            minimum: NSSize(width: 320, height: 190), anchoredToTop: true)
+            minimum: Self.dockedMinimum, anchoredToTop: true)
     }
 
     private func displayResize(_ rect: NSRect, floating: Bool) {
@@ -939,16 +988,42 @@ final class IslandNoteController: NSObject {
         #endif
     }
 
+    /// Corners are offered whenever the note is open: four when floating, the bottom two when docked.
+    private func updateResizeHandles() {
+        resizeHandles.isEnabled = mode == .expanded
+        resizeHandles.allowsTopCorners = dragInteraction.isFloating
+    }
+
+    /// The outer part of a corner handle lies outside the note; it still counts as the note.
+    private func isOverResizeHandle(_ screenPoint: NSPoint) -> Bool {
+        guard resizeHandles.isEnabled else { return false }
+        return resizeHandles.hitTest(panel.convertPoint(fromScreen: screenPoint)) != nil
+    }
+
     private func updateViewportHitAreas() {
         if !resizeHandles.isEnabled { lastResizeHover = nil }
         hitGate.hitRect = mode == .expanded && resizeHandles.isEnabled
             ? expandedRect.insetBy(dx: -PanelResizeView.outsideReach, dy: -PanelResizeView.outsideReach) : rect(for: mode)
+        hitGate.solidRect = mode == .expanded && resizeHandles.isEnabled ? expandedRect : .zero
         island.hitRect = rect(for: mode)
         resizeHandles.panelRect = expandedRect
     }
 
     func beginEdgeResize(edges: PanelResizeEdges, at mouse: NSPoint) {
-        guard mode == .expanded, dragInteraction.isFloating, dragInteraction.prepareForResize() else { return }
+        guard mode == .expanded, dragInteraction.prepareForResize() else { return }
+        guard dragInteraction.isFloating else {
+            // Docked: the top stays on the island and the note stays centred under it.
+            guard edges.contains(.bottom), !dragInteraction.isDocking else { return }
+            stopViewportAnimation()
+            resetPinchGesture()
+            pendingCollapse?.cancel(); pendingCollapse = nil
+            edgeResize = EdgeResize(edges: edges, mouse: mouse, rect: screenRect(expandedRect),
+                                    maximum: .zero, screen: .zero)
+            updateEditorResizeLifecycle()
+            logger.info("Docked corner resize began")
+            diagnostics.record(.edgeResizeBegan, state: diagnosticState())
+            return
+        }
         stopViewportAnimation()
         resetPinchGesture()
         dragInteraction.recoverDisplay()
@@ -958,12 +1033,20 @@ final class IslandNoteController: NSObject {
         edgeResize = EdgeResize(edges: edges, mouse: mouse, rect: screenRect(expandedRect),
                                 maximum: floatingMaximum(screen: screen), screen: screen.visibleFrame)
         updateEditorResizeLifecycle()
-        logger.info("Floating edge resize began")
+        logger.info("Floating corner resize began")
         diagnostics.record(.edgeResizeBegan, state: diagnosticState())
     }
 
     func moveEdgeResize(to mouse: NSPoint) {
         guard let session = edgeResize else { return }
+        guard dragInteraction.isFloating else {
+            let dx = (mouse.x - session.mouse.x) * (session.edges.contains(.left) ? -1 : 1)
+            let size = dockedFit(NSSize(width: session.rect.width + dx * 2,
+                                        height: session.rect.height - (mouse.y - session.mouse.y)))
+            dockedSize = size
+            applyViewport(size: size)
+            return
+        }
         let rect = FloatingPanelLayout.resized(session.rect, edges: session.edges,
             delta: NSPoint(x: mouse.x - session.mouse.x, y: mouse.y - session.mouse.y),
             maximum: session.maximum, screen: session.screen)
@@ -978,7 +1061,7 @@ final class IslandNoteController: NSObject {
         guard edgeResize != nil else { return }
         edgeResize = nil
         updateEditorResizeLifecycle()
-        logger.info("Floating size: \(self.expandedRect.width, privacy: .public) x \(self.expandedRect.height, privacy: .public)")
+        logger.info("Corner resize ended at \(self.expandedRect.width, privacy: .public) x \(self.expandedRect.height, privacy: .public)")
         diagnostics.record(.edgeResizeEnded, state: diagnosticState())
     }
 
@@ -1006,14 +1089,14 @@ final class IslandNoteController: NSObject {
         guard mode == .expanded || !isAuxiliaryWindowOpen else { return }
         // Shrinking can move the edge past a stationary pointer. Wait for the
         // gesture/animation to finish before accepting a new hover-exit movement.
-        guard !isPinching, resizeTimer == nil else { return }
+        guard !isPinching, resizeTimer == nil, edgeResize == nil else { return }
         let loc = screenPoint(for: event)
         let isMovement = event?.type == .mouseMoved || event?.type == .leftMouseDragged
         guard menuOpenHoverGate.allowsHover(at: loc, isMovement: isMovement,
             timestamp: event?.timestamp ?? ProcessInfo.processInfo.systemUptime) else { return }
         switch mode {
         case .expanded:
-            let inExpanded = screenRect(rect(for: .expanded)).insetBy(dx: -10, dy: -8).contains(loc)
+            let inExpanded = screenRect(rect(for: .expanded)).insetBy(dx: -10, dy: -8).contains(loc) || isOverResizeHandle(loc)
             if inExpanded {
                 pendingCollapse?.cancel()
                 pendingCollapse = nil
@@ -1023,7 +1106,8 @@ final class IslandNoteController: NSObject {
                     guard let self else { return }
                     self.pendingCollapse = nil
                     guard self.menuOpenEpoch == epoch else { return }
-                    if self.mode == .expanded, !self.dragInteraction.preventsCollapse,
+                    if self.mode == .expanded, !self.dragInteraction.preventsCollapse, self.edgeResize == nil,
+                       !self.isOverResizeHandle(NSEvent.mouseLocation),
                        !self.screenRect(self.rect(for: .expanded)).insetBy(dx: -6, dy: -4).contains(NSEvent.mouseLocation) {
                         self.collapse(automatically: true)
                     }
@@ -1053,7 +1137,7 @@ final class IslandNoteController: NSObject {
         let loc = screenPoint(for: e)
         switch mode {
         case .expanded:
-            if !screenRect(rect(for: .expanded)).insetBy(dx: -8, dy: -8).contains(loc) {
+            if !screenRect(rect(for: .expanded)).insetBy(dx: -8, dy: -8).contains(loc), !isOverResizeHandle(loc) {
                 collapse(automatically: true)
             }
         case .rest where !hasNotch, .hover where !hasNotch:
@@ -1151,6 +1235,7 @@ final class IslandNoteController: NSObject {
         picker.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText, .plainText]
         picker.allowsOtherFileTypes = false
         picker.directoryURL = store.fileURL.deletingLastPathComponent()
+        NSApp.activate(ignoringOtherApps: true)
         guard picker.runModal() == .OK, let url = picker.url else { return }
         // Native editor changes publish on the next main-queue turn.
         DispatchQueue.main.async { [weak self] in self?.switchNote(to: url, saveCopy: saveCopy) }
@@ -1325,9 +1410,8 @@ final class IslandNoteController: NSObject {
             menuOpenTimer = nil
             menuOpenHoverGate.reset()
         }
-        hitGate.hitRect = rect(for: m)
-        island.hitRect = rect(for: m)
-        resizeHandles.panelRect = expandedRect
+        updateResizeHandles()
+        updateViewportHitAreas()
 
         // 只在展开态显示编辑器，收起时岛体是纯黑胶囊
         let showEditor = (m == .expanded)

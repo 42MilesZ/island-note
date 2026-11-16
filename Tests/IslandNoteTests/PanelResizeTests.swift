@@ -64,24 +64,53 @@ final class PanelResizeTests: XCTestCase {
     }
 
     @MainActor
-    func testOnlyEdgesAndCornersInterceptInput() {
+    func testOnlyCornersInterceptInput() {
         _ = NSApplication.shared
         let view = PanelResizeView(frame: NSRect(x: 0, y: 0, width: 1000, height: 1000))
         view.panelRect = NSRect(x: 100, y: 100, width: 420, height: 460)
         view.isEnabled = true
         let r = view.panelRect
-        for point in [NSPoint(x: r.minX, y: r.midY), NSPoint(x: r.maxX, y: r.midY),
-                      NSPoint(x: r.midX, y: r.minY), NSPoint(x: r.midX, y: r.maxY),
-                      NSPoint(x: r.minX + 12, y: r.minY + 12), NSPoint(x: r.maxX - 8, y: r.maxY - 12)] {
+        for point in [NSPoint(x: r.minX + 12, y: r.minY + 12), NSPoint(x: r.maxX - 12, y: r.minY + 12),
+                      NSPoint(x: r.minX + 12, y: r.maxY - 12), NSPoint(x: r.maxX - 8, y: r.maxY - 12)] {
             XCTAssertNotNil(view.hitTest(point))
         }
+        // Edges are no longer resize handles.
+        for point in [NSPoint(x: r.minX, y: r.midY), NSPoint(x: r.maxX, y: r.midY),
+                      NSPoint(x: r.midX, y: r.minY), NSPoint(x: r.midX, y: r.maxY)] {
+            XCTAssertNil(view.hitTest(point))
+        }
+        // A docked note keeps its top on the island: only the bottom corners resize.
+        view.allowsTopCorners = false
+        XCTAssertNotNil(view.hitTest(NSPoint(x: r.minX + 12, y: r.minY + 12)))
+        XCTAssertNotNil(view.hitTest(NSPoint(x: r.maxX - 12, y: r.minY + 12)))
+        XCTAssertNil(view.hitTest(NSPoint(x: r.minX + 12, y: r.maxY - 12)))
+        XCTAssertNil(view.hitTest(NSPoint(x: r.maxX - 8, y: r.maxY - 12)))
+        view.allowsTopCorners = true
         XCTAssertNil(view.hitTest(NSPoint(x: r.midX, y: r.midY)))
         XCTAssertNil(view.hitTest(NSPoint(x: r.midX, y: r.maxY - 19)))
         XCTAssertNil(view.hitTest(NSPoint(x: r.maxX - 27, y: r.maxY - 19)))
         XCTAssertNil(view.hitTest(NSPoint(x: r.maxX - 16, y: r.maxY - 8)))
         XCTAssertNil(view.hitTest(NSPoint(x: r.maxX - 16, y: r.maxY - 23)))
         view.isEnabled = false
-        XCTAssertNil(view.hitTest(NSPoint(x: r.minX, y: r.midY)))
+        XCTAssertNil(view.hitTest(NSPoint(x: r.minX + 12, y: r.minY + 12)))
+    }
+
+    @MainActor
+    func testBandAroundTheNotePassesClicksThroughExceptOnCorners() {
+        _ = NSApplication.shared
+        let root = IslandView(frame: NSRect(x: 0, y: 0, width: 800, height: 800))
+        let handles = PanelResizeView(frame: root.bounds)
+        handles.panelRect = NSRect(x: 100, y: 100, width: 420, height: 460)
+        handles.isEnabled = true
+        handles.allowsTopCorners = false
+        root.addSubview(handles)
+        let r = handles.panelRect
+        root.hitRect = r.insetBy(dx: -PanelResizeView.outsideReach, dy: -PanelResizeView.outsideReach)
+        root.solidRect = r
+        XCTAssertTrue(root.hitTest(NSPoint(x: r.midX, y: r.midY)) === root)
+        XCTAssertNil(root.hitTest(NSPoint(x: r.minX - 10, y: r.midY)), "The band beside the note passes clicks through")
+        XCTAssertNil(root.hitTest(NSPoint(x: r.midX, y: r.minY - 10)))
+        XCTAssertTrue(root.hitTest(NSPoint(x: r.maxX + 10, y: r.minY - 10)) is PanelResizeHandle)
     }
 
     @MainActor
