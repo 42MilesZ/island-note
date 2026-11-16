@@ -132,7 +132,7 @@ make run
 
 `make test` runs everything except the slow panel-resize suite (about half a minute). Run `make test-resize` after changing resize, pinch, drag or docking behaviour, and `make test-all` before a release. A single suite runs with `swift test --filter DockRevealTests`.
 
-`make package` builds a fresh signed `IslandNote.app` without opening it, with an application icon and version metadata. Previous bundles are kept recoverable under the ignored `.build/` directory.
+`make package` builds a fresh signed `.build/local-release.noindex/IslandNote.app` without opening it, with an application icon and version metadata. The `.noindex` output keeps development bundles out of Spotlight app results. Previous bundles are kept recoverable under the ignored `.build/` directory.
 
 `Resources/AppIcon.svg` is the shared icon source. Run `make icons` to regenerate
 the ICNS used by Xcode. Direct packaging and TestFlight packaging generate their

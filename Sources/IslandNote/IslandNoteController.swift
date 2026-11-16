@@ -1279,6 +1279,7 @@ final class IslandNoteController: NSObject {
             return
         }
         guard !finishingCollapse else { return }
+        logger.info("Panel collapse requested; automatic=\(automatically, privacy: .public)")
         finishingCollapse = true
         let epoch = menuOpenEpoch
         // The Markdown editor delivers the new source text asynchronously.
@@ -1308,6 +1309,7 @@ final class IslandNoteController: NSObject {
     private func goTo(_ m: Mode) {
         guard m != mode else { return }
         let previous = mode
+        logger.info("Panel mode \(String(describing: previous), privacy: .public) → \(String(describing: m), privacy: .public)")
         stopViewportAnimation()
         edgeResize = nil
         resizeHandles.isEnabled = false

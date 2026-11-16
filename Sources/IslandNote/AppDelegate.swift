@@ -12,6 +12,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         logger.info("Application ready with menu bar commands")
     }
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        logger.info("Reopen requested; presenting the note")
+        controller?.openFromStatusMenu()
+        return false
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         logger.info("Quit requested; flushing pending edits")
         // MarkdownEngine publishes native edits to its binding on the next main-queue turn.

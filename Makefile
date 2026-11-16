@@ -32,7 +32,7 @@ install-local: package
 	./scripts/install-local.sh
 
 run: package
-	open IslandNote.app
+	open .build/local-release.noindex/IslandNote.app
 
 notarize: package
 	./scripts/notarize.sh

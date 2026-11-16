@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 : "${NOTARY_PROFILE:?Set NOTARY_PROFILE to an existing notarytool Keychain profile.}"
-app="$PWD/IslandNote.app"
+app="$PWD/.build/local-release.noindex/IslandNote.app"
 codesign --verify --deep --strict "$app"
 signature="$(codesign -dvv "$app" 2>&1)"
 if [[ "$signature" != *"Authority=Developer ID Application:"* ]]; then

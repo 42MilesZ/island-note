@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-source="$PWD/IslandNote.app"
+source="$PWD/.build/local-release.noindex/IslandNote.app"
 destination="${1:-$HOME/Applications/IslandNote.app}"
 identifier="local.projects.island-note"
 
