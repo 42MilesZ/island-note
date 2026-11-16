@@ -95,8 +95,23 @@ final class IslandPanel: NSPanel {
             NSApp.terminate(nil)
             return true
         default:
+            // ⌘ with arrows / delete / Home / End are text-system bindings
+            // (moveToBeginningOfLine:, deleteToBeginningOfLine: …), not key equivalents.
+            // Hand them back so keyDown reaches the text view's interpretKeyEvents.
+            if Self.isTextNavigationKey(event), firstResponder is NSTextView {
+                return super.performKeyEquivalent(with: event)
+            }
             return true
         }
+    }
+
+    static func isTextNavigationKey(_ event: NSEvent) -> Bool {
+        guard let scalar = event.charactersIgnoringModifiers?.unicodeScalars.first else { return false }
+        let keys: [Int] = [NSUpArrowFunctionKey, NSDownArrowFunctionKey, NSLeftArrowFunctionKey,
+                           NSRightArrowFunctionKey, NSHomeFunctionKey, NSEndFunctionKey,
+                           NSPageUpFunctionKey, NSPageDownFunctionKey, NSDeleteFunctionKey,
+                           NSDeleteCharacter, NSBackspaceCharacter]
+        return keys.contains(Int(scalar.value))
     }
 }
 
@@ -584,7 +599,7 @@ final class IslandNoteController: NSObject {
             resetPinchGesture()
             pendingDockedSize = nil
             stopViewportAnimation()
-            dockedSize = magnifiedRect(dockedScreenRect(size: dockedSize), delta: 0, floating: false).rect.size
+            dockedSize = dockedFit(dockedSize)
             applyViewport(size: dockedSize)
         }
         if !dragInteraction.preventsCollapse {
@@ -689,14 +704,21 @@ final class IslandNoteController: NSObject {
     private func changeFloatingLayout(_ floating: Bool) {
         interruptEdgeResize()
         resizeHandles.isEnabled = floating
+        // Detaching and docking keep the note's current size; only each mode's limits apply.
+        let current = targetViewportSize ?? expandedRect.size
+        let size: NSSize
         if floating {
-            let size = FloatingPanelLayout.clamped(floatingSize ?? PanelSize.standard.floatingDimensions,
-                                                    maximum: floatingMaximum())
+            // An untouched docked note is the last floating size fitted to the dock;
+            // detaching it again restores that size rather than a mid-flight or clipped one.
+            let restoresFloating = floatingSize.map { dockedFit($0) == dockedSize } ?? false
+            size = FloatingPanelLayout.clamped(restoresFloating ? floatingSize! : current, maximum: floatingMaximum())
             floatingSize = size
-            animateViewport(to: size)
         } else {
-            animateViewport(to: dockedSize)
+            size = dockedFit(current)
+            dockedSize = size
         }
+        logger.info("Floating layout \(floating, privacy: .public) applied at \(Int(size.width), privacy: .public)×\(Int(size.height), privacy: .public)")
+        animateViewport(to: size)
         updateViewportHitAreas()
         diagnostics.record(.floatingChanged, state: diagnosticState())
     }
@@ -800,6 +822,16 @@ final class IslandNoteController: NSObject {
         }
     }
 
+    /// Docked limits per axis, so a tall or wide floating note is only capped where it exceeds them.
+    private func dockedFit(_ size: NSSize) -> NSSize {
+        let visible = notchScreen().visibleFrame
+        let maxWidth = min(eW - gutter * 2, 2 * min(screenFrame.midX - visible.minX, visible.maxX - screenFrame.midX))
+        let maxHeight = min(canvasTop - gutter, screenFrame.maxY - visible.minY)
+        return NSSize(width: min(maxWidth, max(min(Self.dockedMinimum.width, maxWidth), size.width)),
+                      height: min(maxHeight, max(min(Self.dockedMinimum.height, maxHeight), size.height)))
+    }
+    private static let dockedMinimum = NSSize(width: 320, height: 190)
+
     private func dockedScreenRect(size: NSSize) -> NSRect {
         viewportFrame(size: size).offsetBy(dx: screenFrame.midX - eW / 2,
                                           dy: screenFrame.maxY - canvasTop)
@@ -816,7 +848,7 @@ final class IslandNoteController: NSObject {
         let height = min(canvasTop - gutter, screenFrame.maxY - visible.minY)
         let bounds = NSRect(x: screenFrame.midX - width / 2, y: screenFrame.maxY - height, width: width, height: height)
         return FloatingPanelLayout.magnified(rect, delta: delta, maximum: bounds.size, screen: bounds,
-            minimum: NSSize(width: 320, height: 190), anchoredToTop: true)
+            minimum: Self.dockedMinimum, anchoredToTop: true)
     }
 
     private func displayResize(_ rect: NSRect, floating: Bool) {
