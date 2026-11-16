@@ -53,27 +53,34 @@ final class NoteStore {
         }
         let settings = directory.appendingPathComponent("settings.json")
         let managed = directory.appendingPathComponent("Island Note.md")
+        self.fileURL = managed
+        usesManagedFile = false
         do {
             if FileManager.default.fileExists(atPath: settings.path) {
                 let config = try JSONDecoder().decode(NoteConfiguration.self, from: Data(contentsOf: settings))
                 guard config.notePath.hasPrefix("/") else { throw CocoaError(.fileReadInvalidFileName) }
+                self.fileURL = URL(fileURLWithPath: config.notePath)
                 if let bookmark = config.bookmark {
                     var stale = false
-                    let resolved = try URL(resolvingBookmarkData: bookmark, options: Self.bookmarkResolutionOptions,
+                    let resolved: URL
+                    do {
+                        resolved = try URL(resolvingBookmarkData: bookmark, options: Self.bookmarkResolutionOptions,
                                            relativeTo: nil, bookmarkDataIsStale: &stale)
+                    } catch {
+                        guard Self.isMissingFile(error) else { throw error }
+                        // A deleted file can invalidate its bookmark. Keep the saved path.
+                        resolved = self.fileURL
+                    }
                     self.fileURL = resolved
                     if Self.usesSecurityScope, resolved.startAccessingSecurityScopedResource() { scopedURL = resolved }
                     bookmarkData = bookmark
-                    if stale || resolved.path != config.notePath {
-                        let refreshed = try Self.makeBookmark(for: resolved)
+                    if (stale || resolved.path != config.notePath),
+                       let refreshed = try? Self.makeBookmark(for: resolved) {
                         bookmarkData = refreshed
                         try Self.writeConfiguration(NoteConfiguration(notePath: resolved.path, bookmark: refreshed), directory: directory)
                     }
                 } else {
                     let url = URL(fileURLWithPath: config.notePath)
-                    guard FileManager.default.fileExists(atPath: url.path) else {
-                        throw SaveError.documentMissing(config.notePath)
-                    }
                     self.fileURL = url
                     // Upgrade path-only settings so later moves can be followed.
                     if let bookmark = try? Self.makeBookmark(for: url) {
@@ -90,8 +97,6 @@ final class NoteStore {
         } catch {
             scopedURL?.stopAccessingSecurityScopedResource()
             scopedURL = nil
-            self.fileURL = managed
-            usesManagedFile = false
             configurationError = error
         }
         if configurationError == nil { legacyDocumentPath = self.fileURL.standardizedFileURL.resolvingSymlinksInPath().path }
@@ -257,15 +262,40 @@ final class NoteStore {
         return try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
     }
 
+    private static func isMissingFile(_ error: Error) -> Bool {
+        let error = error as NSError
+        return error.domain == NSCocoaErrorDomain &&
+            (error.code == NSFileReadNoSuchFileError || error.code == NSFileNoSuchFileError)
+    }
+
+    private func createMissingFile(contents: String) throws {
+        if usesManagedFile {
+            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
+        // For selected files, require the original folder to remain accessible.
+        // Never reconstruct a moved folder or an unavailable external volume.
+        try Data(contents.utf8).write(to: fileURL, options: .withoutOverwriting)
+        NSLog("IslandNote: recreated missing note at %@", fileURL.path)
+        if !usesManagedFile, let bookmark = try? Self.makeBookmark(for: fileURL) {
+            bookmarkData = bookmark
+            try? Self.writeConfiguration(NoteConfiguration(notePath: fileURL.path, bookmark: bookmark), directory: configurationDirectory)
+        }
+    }
+
+    private func readOrCreate(contents: String) throws -> String {
+        do { return try String(contentsOf: fileURL, encoding: .utf8) }
+        catch {
+            guard Self.isMissingFile(error) else { throw error }
+            do { try createMissingFile(contents: contents) }
+            catch CocoaError.fileWriteFileExists { /* Read a concurrently created file. */ }
+            return try String(contentsOf: fileURL, encoding: .utf8)
+        }
+    }
+
     func load() throws -> String {
         if let configurationError { throw configurationError }
         relocateIfMoved()
-        if usesManagedFile, !FileManager.default.fileExists(atPath: fileURL.path) {
-            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            do { try Data().write(to: fileURL, options: .withoutOverwriting) }
-            catch CocoaError.fileWriteFileExists { /* Another launch created it; read that copy. */ }
-        }
-        let text = try String(contentsOf: fileURL, encoding: .utf8)
+        let text = try readOrCreate(contents: "")
         lastLoadedContent = text
         onSaveState?(.saved)
         return text
@@ -275,7 +305,8 @@ final class NoteStore {
     func refreshIfClean() throws -> String? {
         guard pending == nil else { return nil }
         relocateIfMoved()
-        let diskText = try String(contentsOf: fileURL, encoding: .utf8)
+        if let configurationError { throw configurationError }
+        let diskText = try readOrCreate(contents: lastLoadedContent ?? "")
         let changed = diskText != lastLoadedContent
         lastLoadedContent = diskText
         lastErrorMessage = nil
@@ -339,8 +370,14 @@ final class NoteStore {
 
     private func coordinatedWrite(_ text: String, expected: String) throws {
         relocateIfMoved()
-        // Never recreate a moved or deleted note at its old path.
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { throw SaveError.documentMissing(fileURL.path) }
+        if let configurationError { throw configurationError }
+        do {
+            _ = try fileURL.checkResourceIsReachable()
+        } catch {
+            guard Self.isMissingFile(error) else { throw error }
+            try createMissingFile(contents: text)
+            return
+        }
         var coordinationError: NSError?
         var writeError: Error?
         NSFileCoordinator().coordinate(writingItemAt: fileURL, options: .forReplacing,

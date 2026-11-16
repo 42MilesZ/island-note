@@ -166,8 +166,15 @@ To use an existing Markdown file, set its absolute path in the local-only file
 {"notePath": "/path/to/your/note.md"}
 ```
 
-An invalid configuration or a missing selected file blocks saving instead of
-silently creating or switching to another document. Changes save automatically
+Missing files are recreated at the writable selected path after checking whether the original
+file moved or was renamed. During use, recreation retains the loaded or pending
+text; after relaunch, a missing file starts empty. A missing selected folder,
+permission error or invalid configuration blocks saving and keeps the saved path.
+Normal updates replace only the app bundle and retain this configuration. The
+App Store sandbox uses its own Application Support directory; switching between
+sandboxed and local distribution channels requires selecting the file again. A deleted
+external file may also require renewed access in the sandboxed version; a saved
+path alone cannot restore macOS file permissions. Changes save automatically
 while typing and when the panel closes. Local notes and sync backups are never
 part of the source repository.
 
