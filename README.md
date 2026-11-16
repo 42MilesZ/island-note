@@ -218,7 +218,7 @@ universal Apple Silicon / Intel app, exports using App Store Connect signing,
 validates the package, then uploads it. XcodeGen and Xcode 26 are required.
 The Xcode target uses the same maintained `Vendor/MarkdownEngine` package as local SwiftPM builds.
 `ASC_KEY_ID` and `ASC_ISSUER_ID` come from the shell environment; the private key
-stays in `~/.appstoreconnect/private_keys/`. The current release version is `1.0.1`, with default build `12`. Set `BUILD_NUMBER` to a new increasing integer
+stays in `~/.appstoreconnect/private_keys/`. The current release version is `1.0.1`, with default build `13`. Set `BUILD_NUMBER` to a new increasing integer
 for subsequent uploads. An App Store Connect app record
 for `local.projects.island-note` must exist before uploading.
 
@@ -227,6 +227,6 @@ This target defines `ISLAND_APP_STORE` and enables App Sandbox without outgoing 
 The same uploaded build is intended for both internal and external testing
 (`testFlightInternalTestingOnly` is false). Upload acceptance, build processing,
 internal testing and external Beta App Review are separate states: check the
-exact uploaded build before reporting availability. The app requires neither an account nor network access. Version `1.0.1` build `12`
+exact uploaded build before reporting availability. The app requires neither an account nor network access. Version `1.0.1` build `13`
 passed Apple package validation and was uploaded on November 16, 2026, including
-missing-file recovery at the saved location and reopening the note from Finder or Spotlight.
+missing-file recovery, reopening the note from Finder or Spotlight, corner resizing, double-click docking and standard text shortcuts.
